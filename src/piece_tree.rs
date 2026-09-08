@@ -6,6 +6,8 @@ struct PieceTree {
     root: Option<Rc<Node>>,
     undo_stack: Vec<Rc<Node>>,
     redo_stack: Vec<Rc<Node>>,
+    black_leaf: Rc<Node>,
+    double_black_leaf: Rc<Node>,
 }
 impl PieceTree {
     pub fn new(original_content: &str) -> Self {
@@ -16,16 +18,19 @@ impl PieceTree {
                 root: None,
                 undo_stack: Vec::new(),
                 redo_stack: Vec::new(),
+                double_black_leaf: Rc::new(Node::new_double_black_leaf()),
+                black_leaf: Rc::new(Node::new_black_leaf()),
             }
         } else {
             let original = String::from(original_content);
+            let black_leaf = Rc::new(Node::new_black_leaf());
             let root = Some(Rc::new(Node::new(
                 0,
                 original.len(),
                 BufferType::Original,
                 Color::Black,
-                None,
-                None,
+                Some(black_leaf.clone()),
+                Some(black_leaf.clone()),
             )));
 
             Self {
@@ -34,52 +39,114 @@ impl PieceTree {
                 root,
                 undo_stack: Vec::new(),
                 redo_stack: Vec::new(),
+                black_leaf,
+                double_black_leaf: Rc::new(Node::new_double_black_leaf()),
             }
         }
     }
-    pub fn delete(&mut self,index:usize,length:usize){
-
-    }
-    fn delete_node(node:Option<Rc<Node>>,index:usize,length:usize)->Option<Rc<Node>>{
-        match node{
-            Some(curr_node) =>{
-                if index< curr_node.left_subtree_len{
-                    let new_left= Self::delete_node(curr_node.left.clone(), index, length);
-                    let new_current_node = Rc::new(Node::new(curr_node.start, curr_node.length, curr_node.buffer_type, curr_node.color,new_left, curr_node.right.clone()));
-                    Some(Self::bubble(new_current_node))
-                }else if index>= curr_node.left_subtree_len+ curr_node.length{
-                    let new_index=index - curr_node.left_subtree_len-curr_node.length;
-                    let new_right= Self::delete_node(curr_node.right.clone(), new_index, length);
-                    let new_current_node = Rc::new(Node::new(curr_node.start, curr_node.length, curr_node.buffer_type, curr_node.color,curr_node.left.clone(),new_right ));
-                    Some(Self::bubble(new_current_node))
-                }else{
-                    let offset_in_node=index-curr_node.left_subtree_len;
-                    if offset_in_node ==0 && curr_node.length == length{
-                        if curr_node.left.is_some() && curr_node.right.is_some(){
-                            let replacement=Self::find_right_most(curr_node.left.as_ref().unwrap().clone());
-                            let new_curr_node = Rc::new(Node::new(replacement.start, replacement.length, replacement.buffer_type, replacement.color,curr_node.left.clone(),curr_node.right.clone() ));
-
-                        }
-
+    pub fn delete(&mut self, index: usize, length: usize) {}
+    fn delete_node(&self, curr_node: Rc<Node>, index: usize, length: usize) -> Rc<Node> {
+        if index < curr_node.left_subtree_len {
+            let new_left =
+                self.delete_node(curr_node.left.as_ref().unwrap().clone(), index, length);
+            let new_current_node = Rc::new(Node::new(
+                curr_node.start,
+                curr_node.length,
+                curr_node.buffer_type,
+                curr_node.color,
+                Some(new_left),
+                curr_node.right.clone(),
+            ));
+            return Self::bubble(new_current_node);
+        } else if index >= curr_node.left_subtree_len + curr_node.length {
+            let new_index = index - curr_node.left_subtree_len - curr_node.length;
+            let new_right =
+                self.delete_node(curr_node.right.as_ref().unwrap().clone(), new_index, length);
+            let new_current_node = Rc::new(Node::new(
+                curr_node.start,
+                curr_node.length,
+                curr_node.buffer_type,
+                curr_node.color,
+                curr_node.left.clone(),
+                Some(new_right),
+            ));
+            return Self::bubble(new_current_node);
+        } else {
+            let offset_in_node = index - curr_node.left_subtree_len;
+            if offset_in_node == 0 && curr_node.length == length {
+                if curr_node.left.as_ref().unwrap().clone() == self.black_leaf
+                    && curr_node.right.as_ref().unwrap().clone() == self.black_leaf
+                {
+                    if curr_node.color == Color::Black {
+                        return self.double_black_leaf.clone();
+                    } else {
+                        return self.black_leaf.clone();
                     }
-                    None
+                } else if curr_node.left.as_ref().unwrap().clone() != self.black_leaf
+                    && curr_node.right.as_ref().unwrap().clone() != self.black_leaf
+                {
+                    let left_child = curr_node.left.as_ref().unwrap().clone();
+                    let replacement_info = self.find_right_most(left_child.clone());
+                    let new_left = self.remove_right_most(left_child);
+                    let new_current_node = Rc::new(Node::new(
+                        replacement_info.start,
+                        replacement_info.length,
+                        replacement_info.buffer_type,
+                        replacement_info.color,
+                        Some(new_left),
+                        curr_node.right.clone(),
+                    ));
+                    return Self::bubble(new_current_node);
+                } else {
 
+                    let right_child = curr_node.right.as_ref().unwrap().clone();
+                    let new_current_node = Rc::new(Node::new(
+                        right_child.start,
+                        right_child.length,
+                        right_child.buffer_type,
+                        Color::Black,
+                        right_child.left.clone(),
+                        right_child.right.clone(),
+                    ));
+                    return new_current_node;
                 }
-            },
-            None => None,
+            } else {
+            }
         }
-
+        curr_node
     }
-    fn find_right_most(node:Rc<Node>)->Rc<Node>{
-        match node.right.as_ref(){
-            Some(r) => {
-                Self::find_right_most(r.clone())
-            },
-            None => {
-                node
-            },
+    fn remove_right_most(&self, node: Rc<Node>) -> Rc<Node> {
+        if node.right.as_ref().unwrap().clone() == self.black_leaf {
+            if node.color == Color::Black {
+                return self.double_black_leaf.clone();
+            } else {
+                return self.black_leaf.clone();
+            }
         }
-
+        let new_right = self.remove_right_most(node.right.as_ref().unwrap().clone());
+        let new_current_node = Rc::new(Node::new(
+            node.start,
+            node.length,
+            node.buffer_type,
+            node.color,
+            node.left.clone(),
+            Some(new_right),
+        ));
+        return Self::bubble(new_current_node);
+    }
+    fn find_right_most(&self, node: Rc<Node>) -> NodeInfo {
+        let mut current = node;
+        let mut dest = current.clone();
+        while current != self.black_leaf {
+            dest = current.clone();
+            current = current.right.as_ref().unwrap().clone();
+        }
+        NodeInfo {
+            start: dest.start,
+            length: dest.length,
+            color: dest.color,
+            buffer_type: dest.buffer_type,
+        }
     }
     fn bubble(y: Rc<Node>) -> Rc<Node> {
         if y.color == Color::Black
@@ -509,6 +576,7 @@ impl PieceTree {
         z
     }
 }
+#[derive(PartialEq)]
 struct Node {
     start: usize,
     length: usize,
@@ -518,6 +586,13 @@ struct Node {
     subtree_len: usize,
     left: Option<Rc<Node>>,
     right: Option<Rc<Node>>,
+}
+
+struct NodeInfo {
+    start: usize,
+    length: usize,
+    color: Color,
+    buffer_type: BufferType,
 }
 
 impl Node {
@@ -537,7 +612,7 @@ impl Node {
             Some(r) => r.subtree_len,
             None => 0,
         };
-        let subtree_len = left_subtree_len + length +right_subtree_len;
+        let subtree_len = left_subtree_len + length + right_subtree_len;
         Self {
             start,
             length,
@@ -546,9 +621,33 @@ impl Node {
             left,
             right,
             left_subtree_len,
-            subtree_len
+            subtree_len,
         }
-    } 
+    }
+    fn new_black_leaf() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            buffer_type: BufferType::Original,
+            color: Color::Black,
+            left_subtree_len: 0,
+            subtree_len: 0,
+            left: None,
+            right: None,
+        }
+    }
+    fn new_double_black_leaf() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            buffer_type: BufferType::Original,
+            color: Color::DoubleBlack,
+            left_subtree_len: 0,
+            subtree_len: 0,
+            left: None,
+            right: None,
+        }
+    }
     fn left_color(&self) -> Color {
         match self.left.as_ref() {
             Some(l) => l.color,
@@ -606,7 +705,7 @@ impl Node {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum BufferType {
     Original,
     Add,
