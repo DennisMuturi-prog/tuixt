@@ -359,7 +359,9 @@ impl PieceTree {
                     }
                 }
             } else if curr_node.left.as_ref().unwrap().clone() != self.black_leaf
+                && curr_node.left.as_ref().unwrap().clone() != self.double_black_leaf
                 && curr_node.right.as_ref().unwrap().clone() != self.black_leaf
+                && curr_node.right.as_ref().unwrap().clone() != self.double_black_leaf
             {
                 let left_child = curr_node.left.as_ref().unwrap().clone();
                 let replacement_info = self.find_right_most(left_child.clone());
@@ -508,7 +510,7 @@ impl PieceTree {
         ));
         Self::rebalance(new_node)
     }
-    fn remove_right_most(&self, node: Rc<Node>) -> Rc<Node> { 
+    fn remove_right_most(&self, node: Rc<Node>) -> Rc<Node> {
         if node.right.as_ref().unwrap().clone() == self.black_leaf {
             if node.color == Color::Black {
                 return self.double_black_leaf.clone();
@@ -528,9 +530,10 @@ impl PieceTree {
         Self::bubble(new_current_node)
     }
     fn find_right_most(&self, node: Rc<Node>) -> NodeInfo {
+        println!("color is {:#?}", node.color);
         let mut current = node;
         let mut dest = current.clone();
-        while current != self.black_leaf{
+        while current != self.black_leaf {
             dest = current.clone();
             current = current.right.as_ref().unwrap().clone();
         }
