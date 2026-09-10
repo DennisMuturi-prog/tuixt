@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-struct PieceTree {
+pub struct PieceTree {
     original: String,
     add: String,
     root: Option<Rc<Node>>,
@@ -45,10 +45,9 @@ impl PieceTree {
         }
     }
     pub fn get_text(&self, content: &mut String) {
-        if let Some(root_node)= self.root.as_ref(){
+        if let Some(root_node) = self.root.as_ref() {
             self.in_order_traversal(root_node, content);
-
-        } 
+        }
     }
 
     fn in_order_traversal(&self, node: &Rc<Node>, content: &mut String) {
@@ -58,7 +57,7 @@ impl PieceTree {
         self.in_order_traversal(node.left.as_ref().unwrap(), content);
         let content_str = match node.buffer_type {
             BufferType::Original => &self.original[node.start..node.start + node.length],
-            BufferType::Add => &self.original[node.start..node.start + node.length],
+            BufferType::Add => &self.add[node.start..node.start + node.length],
         };
         content.push_str(content_str);
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
@@ -95,7 +94,7 @@ impl PieceTree {
                     ));
                     self.root = Some(new_current_node);
                 } else {
-                    let new_right = self.insert_as_successor(right, node_to_insert);
+                    let new_right = self.insert_as_predecessor(right, node_to_insert);
                     let new_current_node = Rc::new(Node::new(
                         root_node.start,
                         root_node.length,
@@ -103,6 +102,15 @@ impl PieceTree {
                         root_node.color,
                         root_node.left.clone(),
                         Some(new_right),
+                    ));
+                    let new_root = Self::rebalance(new_current_node);
+                    let new_current_node = Rc::new(Node::new(
+                        new_root.start,
+                        new_root.length,
+                        new_root.buffer_type,
+                        Color::Black,
+                        new_root.left.clone(),
+                        new_root.right.clone(),
                     ));
                     self.root = Some(new_current_node);
                 }
@@ -289,6 +297,7 @@ impl PieceTree {
                         new_length: new_left.new_length,
                     }
                 } else {
+                    println!("new index is {}",new_current_node.new_index);
                     let new_index =
                         new_current_node.new_index - curr_node.left_subtree_len - curr_node.length;
                     let new_right = self.delete_node(
@@ -440,11 +449,11 @@ impl PieceTree {
                     curr_node.left.clone(),
                     Some(second_part),
                 ));
-                return DeleteMetaData {
+                DeleteMetaData {
                     new_node: first_part,
                     new_index: index + (curr_node.length - offset_in_node),
                     new_length: 0,
-                };
+                }
             } else {
                 let right = self.insert_as_successor(right, second_part);
                 let first_part = Rc::new(Node::new(
@@ -455,11 +464,11 @@ impl PieceTree {
                     curr_node.left.clone(),
                     Some(right),
                 ));
-                return DeleteMetaData {
+                DeleteMetaData {
                     new_node: Self::rebalance(first_part),
                     new_index: index + (curr_node.length - offset_in_node),
                     new_length: 0,
-                };
+                }
             }
         }
     }
@@ -487,6 +496,7 @@ impl PieceTree {
         ));
         Self::rebalance(new_node)
     }
+    
     fn insert_as_predecessor(&self, curr_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
         if curr_node.right.as_ref().unwrap().clone() == self.black_leaf {
             let new_node = Rc::new(Node::new(
@@ -500,7 +510,7 @@ impl PieceTree {
             return Self::rebalance(new_node);
         }
         let right_path =
-            self.insert_as_predecessor(curr_node.left.as_ref().unwrap().clone(), node_to_insert);
+            self.insert_as_predecessor(curr_node.right.as_ref().unwrap().clone(), node_to_insert);
         let new_node = Rc::new(Node::new(
             curr_node.start,
             curr_node.length,
