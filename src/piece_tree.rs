@@ -99,6 +99,16 @@ impl PieceTree {
                 ));
                 self.root = Some(new_current_node);
             }
+        } else {
+            let node_to_insert = Rc::new(Node::new(
+                node_info_to_insert.start,
+                node_info_to_insert.length,
+                node_info_to_insert.buffer_type,
+                Color::Black,
+                Some(self.black_leaf.clone()),
+                Some(self.black_leaf.clone()),
+            ));
+            self.root = Some(node_to_insert);
         }
     }
     fn insert_node(&self, curr_node: Rc<Node>, node_to_insert: NodeInfo, index: usize) -> Rc<Node> {
@@ -212,12 +222,12 @@ impl PieceTree {
     }
     pub fn delete(&mut self, index: usize, length: usize) {
         if let Some(root_node) = self.root.as_ref() {
-            if index>= root_node.subtree_len{
+            if index >= root_node.subtree_len {
                 return;
             }
             self.undo_stack.push(root_node.clone());
-            let new_root = self.delete_node(root_node.clone(), index,length);
-            let new_root= new_root.new_node;
+            let new_root = self.delete_node(root_node.clone(), index, length);
+            let new_root = new_root.new_node;
             let new_current_node = Rc::new(Node::new(
                 new_root.start,
                 new_root.length,
