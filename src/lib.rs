@@ -17,6 +17,7 @@ mod tests {
         my_piece_tree.get_text(&mut content);
         assert_eq!("hello world", content);
         my_piece_tree.delete(6, 3);
+        content.clear();
         my_piece_tree.get_text(&mut content);
         assert_eq!("hello ld", content);
     }
