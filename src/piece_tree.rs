@@ -44,6 +44,25 @@ impl PieceTree {
             }
         }
     }
+    pub fn get_text(&self, content: &mut String) {
+        if let Some(root_node)= self.root.as_ref(){
+            self.in_order_traversal(root_node, content);
+
+        } 
+    }
+
+    fn in_order_traversal(&self, node: &Rc<Node>, content: &mut String) {
+        if node == &self.black_leaf {
+            return;
+        }
+        self.in_order_traversal(node.left.as_ref().unwrap(), content);
+        let content_str = match node.buffer_type {
+            BufferType::Original => &self.original[node.start..node.start + node.length],
+            BufferType::Add => &self.original[node.start..node.start + node.length],
+        };
+        content.push_str(content_str);
+        self.in_order_traversal(node.right.as_ref().unwrap(), content);
+    }
     pub fn insert(&mut self, content: &str, index: usize) {
         let start = self.add.len();
         self.add.push_str(content);
@@ -53,7 +72,7 @@ impl PieceTree {
             color: Color::Red,
             buffer_type: BufferType::Add,
         };
-        if let Some(root_node) = self.root.as_ref() {
+        if let Some(root_node) = self.root.take() {
             self.undo_stack.push(root_node.clone());
             let node_to_insert = Rc::new(Node::new(
                 node_info_to_insert.start,
