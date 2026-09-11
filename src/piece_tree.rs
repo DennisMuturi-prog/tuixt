@@ -1332,7 +1332,13 @@ impl Node {
         let black_height = match color {
             Color::NegativeBlack => child_blk_h,
             Color::Red => child_blk_h,
-            Color::Black => child_blk_h + 1,
+            Color::Black => {
+                if left.is_none() && right.is_none() {
+                    0 // Any leaf sentinel has black_height = 0
+                } else {
+                    child_blk_h + 1
+                }
+            }
             Color::DoubleBlack => child_blk_h,
         };
         let subtree_len = left_subtree_len + length + right_subtree_len;
