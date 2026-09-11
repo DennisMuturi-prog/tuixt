@@ -248,6 +248,59 @@ impl PieceTree {
         }
     }
     pub fn delete(&mut self, index: usize, length: usize) {
+        if let Some(root_node) = self.root.take() {
+            if index >= root_node.subtree_len {
+                return;
+            }
+            self.undo_stack.push(root_node.clone());
+            if index == 0 {
+                if length >= root_node.subtree_len {
+                    self.root = None;
+                    return;
+                } else {
+                    let (_, t2) = self.split(root_node, length);
+                    let new_current_node = Rc::new(Node::new(
+                        t2.start,
+                        t2.length,
+                        t2.buffer_type,
+                        Color::Black,
+                        t2.left.clone(),
+                        t2.right.clone(),
+                    ));
+                    self.root = Some(new_current_node);
+                    return;
+                }
+            }
+            let (t1, t2) = self.split(root_node, index);
+            if length >= t2.subtree_len {
+                let new_root = t1.clone();
+                let new_current_node = Rc::new(Node::new(
+                    new_root.start,
+                    new_root.length,
+                    new_root.buffer_type,
+                    Color::Black,
+                    new_root.left.clone(),
+                    new_root.right.clone(),
+                ));
+
+                self.root = Some(new_current_node);
+            } else {
+                let (_, t3) = self.split(t2.clone(), length);
+                let new_root = self.merge(t1.clone(), t3);
+                let new_current_node = Rc::new(Node::new(
+                    new_root.start,
+                    new_root.length,
+                    new_root.buffer_type,
+                    Color::Black,
+                    new_root.left.clone(),
+                    new_root.right.clone(),
+                ));
+
+                self.root = Some(new_current_node);
+            }
+        }
+    }
+    pub fn delete_legacy(&mut self, index: usize, length: usize) {
         if let Some(root_node) = self.root.as_ref() {
             if index >= root_node.subtree_len {
                 return;
@@ -265,6 +318,188 @@ impl PieceTree {
             ));
             self.root = Some(new_current_node);
         }
+    }
+    fn insert_at_rightmost_with_target_black_height(
+        current_node: Rc<Node>,
+        pivot: Rc<Node>,
+        t2: Rc<Node>,
+        target_black_height: usize,
+    ) -> Rc<Node> {
+        if current_node.black_height == target_black_height {
+            Rc::new(Node::new(
+                pivot.start,
+                pivot.length,
+                pivot.buffer_type,
+                Color::Red,
+                Some(current_node),
+                Some(t2),
+            ))
+        } else {
+            let new_right = Self::insert_at_rightmost_with_target_black_height(
+                current_node.right.as_ref().unwrap().clone(),
+                pivot,
+                t2,
+                target_black_height,
+            );
+            Self::rebalance(Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                current_node.left.clone(),
+                Some(new_right),
+            )))
+        }
+    }
+    fn insert_at_leftmost_with_target_black_height(
+        current_node: Rc<Node>,
+        pivot: Rc<Node>,
+        t1: Rc<Node>,
+        target_black_height: usize,
+    ) -> Rc<Node> {
+        if current_node.black_height == target_black_height {
+            Rc::new(Node::new(
+                pivot.start,
+                pivot.length,
+                pivot.buffer_type,
+                Color::Red,
+                Some(t1),
+                Some(current_node),
+            ))
+        } else {
+            let new_left = Self::insert_at_leftmost_with_target_black_height(
+                current_node.left.as_ref().unwrap().clone(),
+                pivot,
+                t1,
+                target_black_height,
+            );
+            Self::rebalance(Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                Some(new_left),
+                current_node.right.clone(),
+            )))
+        }
+    }
+    fn join(t1: Rc<Node>, pivot: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
+        if t1.black_height == t2.black_height {
+            Rc::new(Node::new(
+                pivot.start,
+                pivot.length,
+                pivot.buffer_type,
+                Color::Black,
+                Some(t1),
+                Some(t2),
+            ))
+        } else if t1.black_height > t2.black_height {
+            let target_black_height = t2.black_height;
+            Self::insert_at_rightmost_with_target_black_height(t1, pivot, t2, target_black_height)
+        } else {
+            let target_black_height = t1.black_height;
+            Self::insert_at_leftmost_with_target_black_height(t2, pivot, t1, target_black_height)
+        }
+    }
+    fn split(&self, current_node: Rc<Node>, index: usize) -> (Rc<Node>, Rc<Node>) {
+        if index < current_node.left_subtree_len {
+            let (t1, t2) = self.split(current_node.left.as_ref().unwrap().clone(), index);
+            let pivot = Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                Some(self.black_leaf.clone()),
+                Some(self.black_leaf.clone()),
+            ));
+            (
+                t1,
+                Self::join(t2, pivot, current_node.right.as_ref().unwrap().clone()),
+            )
+        } else if index >= current_node.left_subtree_len + current_node.length {
+            let index = index - current_node.left_subtree_len - current_node.length;
+            let (t1, t2) = self.split(current_node.right.as_ref().unwrap().clone(), index);
+            let pivot = Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                Some(self.black_leaf.clone()),
+                Some(self.black_leaf.clone()),
+            ));
+            (
+                Self::join(current_node.left.as_ref().unwrap().clone(), pivot, t1),
+                t2,
+            )
+        } else {
+            let offset_in_node = index - current_node.left_subtree_len;
+            if offset_in_node == 0 {
+                let t1 = Rc::new(Node::new(
+                    current_node.start,
+                    current_node.length,
+                    current_node.buffer_type,
+                    current_node.color,
+                    Some(self.black_leaf.clone()),
+                    Some(self.black_leaf.clone()),
+                ));
+                let t2 = self.merge(t1, current_node.right.as_ref().unwrap().clone());
+                (current_node.left.as_ref().unwrap().clone(), t2)
+            } else {
+                let first_part = Rc::new(Node::new(
+                    current_node.start,
+                    offset_in_node,
+                    current_node.buffer_type,
+                    current_node.color,
+                    Some(self.black_leaf.clone()),
+                    Some(self.black_leaf.clone()),
+                ));
+                let second_part = Rc::new(Node::new(
+                    current_node.start + offset_in_node,
+                    current_node.length - offset_in_node,
+                    current_node.buffer_type,
+                    current_node.color,
+                    Some(self.black_leaf.clone()),
+                    Some(self.black_leaf.clone()),
+                ));
+                let t1 = self.merge(current_node.left.as_ref().unwrap().clone(), first_part);
+                let t2 = self.merge(second_part, current_node.right.as_ref().unwrap().clone());
+                (t1, t2)
+            }
+        }
+    }
+    fn merge(&self, t1: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
+        if t1 == self.black_leaf {
+            return t2;
+        }
+        if t2 == self.black_leaf {
+            return t1;
+        }
+        let pivot = self.find_right_most(t1.clone());
+        let t1 = self.remove_right_most(t1);
+        let t1 = if t1 == self.double_black_leaf {
+            self.black_leaf.clone()
+        } else if t1.color == Color::DoubleBlack {
+            // If the root of t1 became double-black from bubblin,absorbing it here
+            Rc::new(Node::new(
+                t1.start,
+                t1.length,
+                t1.buffer_type,
+                Color::Black, // Absorb double-black at the root of t1
+                t1.left.clone(),
+                t1.right.clone(),
+            ))
+        } else {
+            t1
+        };
+        let pivot = Rc::new(Node::new(
+            pivot.start,
+            pivot.length,
+            pivot.buffer_type,
+            Color::Red,
+            Some(self.black_leaf.clone()),
+            Some(self.black_leaf.clone()),
+        ));
+        Self::join(t1, pivot, t2)
     }
     fn delete_node(&self, curr_node: Rc<Node>, index: usize, length: usize) -> DeleteMetaData {
         if index < curr_node.left_subtree_len {
@@ -297,11 +532,31 @@ impl PieceTree {
                 {
                     new_current_node
                 } else {
-                    self.delete_node(new_current_node.new_node, 0, new_current_node.new_length)
+                    let right = new_current_node.new_node.right.as_ref().unwrap().clone();
+                    if right == self.black_leaf {
+                        return DeleteMetaData {
+                            new_node: Self::bubble(new_current_node.new_node),
+                            new_length: new_current_node.new_length,
+                        };
+                    }
+                    let new_right = self.delete_node(right, 0, new_current_node.new_length);
+                    let new_current_node = Rc::new(Node::new(
+                        new_current_node.new_node.start,
+                        new_current_node.new_node.length,
+                        new_current_node.new_node.buffer_type,
+                        new_current_node.new_node.color,
+                        new_current_node.new_node.left.clone(),
+                        Some(new_right.new_node),
+                    ));
+                    DeleteMetaData {
+                        new_node: Self::bubble(new_current_node),
+                        new_length: new_right.new_length,
+                    }
                 }
             }
         } else if index >= curr_node.left_subtree_len + curr_node.length {
             let new_index = index - curr_node.left_subtree_len - curr_node.length;
+            println!("length is {}", length);
             let new_right =
                 self.delete_node(curr_node.right.as_ref().unwrap().clone(), new_index, length);
             let new_current_node = Rc::new(Node::new(
@@ -332,8 +587,27 @@ impl PieceTree {
                 // No more nodes in this subtree to delete from, return remaining length to parent
                 new_current_node
             } else {
+                let right = new_current_node.new_node.right.as_ref().unwrap().clone();
+                if right == self.black_leaf {
+                    return DeleteMetaData {
+                        new_node: Self::bubble(new_current_node.new_node),
+                        new_length: new_current_node.new_length,
+                    };
+                }
                 // Continue deleting remaining characters from the start of the replacement subtree
-                self.delete_node(new_current_node.new_node, 0, new_current_node.new_length)
+                let new_right = self.delete_node(right, 0, new_current_node.new_length);
+                let new_current_node = Rc::new(Node::new(
+                    new_current_node.new_node.start,
+                    new_current_node.new_node.length,
+                    new_current_node.new_node.buffer_type,
+                    new_current_node.new_node.color,
+                    new_current_node.new_node.left.clone(),
+                    Some(new_right.new_node),
+                ));
+                DeleteMetaData {
+                    new_node: Self::bubble(new_current_node),
+                    new_length: new_right.new_length,
+                }
             }
         }
     }
@@ -359,9 +633,9 @@ impl PieceTree {
                     }
                 }
             } else if curr_node.left.as_ref().unwrap().clone() != self.black_leaf
-                && curr_node.left.as_ref().unwrap().clone() != self.double_black_leaf
+                // && curr_node.left.as_ref().unwrap().clone() != self.double_black_leaf
                 && curr_node.right.as_ref().unwrap().clone() != self.black_leaf
-                && curr_node.right.as_ref().unwrap().clone() != self.double_black_leaf
+            // && curr_node.right.as_ref().unwrap().clone() != self.double_black_leaf
             {
                 let left_child = curr_node.left.as_ref().unwrap().clone();
                 let replacement_info = self.find_right_most(left_child.clone());
@@ -370,7 +644,7 @@ impl PieceTree {
                     replacement_info.start,
                     replacement_info.length,
                     replacement_info.buffer_type,
-                    replacement_info.color,
+                    curr_node.color,
                     Some(new_left),
                     curr_node.right.clone(),
                 ));
@@ -380,18 +654,43 @@ impl PieceTree {
                 }
             } else {
                 let right_child = curr_node.right.as_ref().unwrap().clone();
-                let new_current_node = Rc::new(Node::new(
-                    right_child.start,
-                    right_child.length,
-                    right_child.buffer_type,
-                    Color::Black,
-                    right_child.left.clone(),
-                    right_child.right.clone(),
-                ));
+                if right_child != self.black_leaf {
+                    let new_current_node = Rc::new(Node::new(
+                        right_child.start,
+                        right_child.length,
+                        right_child.buffer_type,
+                        Color::Black,
+                        right_child.left.clone(),
+                        right_child.right.clone(),
+                    ));
+                    let remaining = length - curr_node.length;
+                    if remaining == 0 {
+                        DeleteMetaData {
+                            new_node: new_current_node,
+                            new_length: 0,
+                        }
+                    } else {
+                        let new_current_node = self.delete_node(new_current_node, 0, remaining);
+                        return DeleteMetaData {
+                            new_node: Self::bubble(new_current_node.new_node),
+                            new_length: new_current_node.new_length,
+                        };
+                    }
+                } else {
+                    let left_child = curr_node.left.as_ref().unwrap().clone();
+                    let new_current_node = Rc::new(Node::new(
+                        left_child.start,
+                        left_child.length,
+                        left_child.buffer_type,
+                        Color::Black,
+                        left_child.left.clone(),
+                        left_child.right.clone(),
+                    ));
 
-                DeleteMetaData {
-                    new_node: new_current_node,
-                    new_length: length - curr_node.length,
+                    DeleteMetaData {
+                        new_node: new_current_node,
+                        new_length: length - curr_node.length,
+                    }
                 }
             }
         } else if offset_in_node == 0 && length < curr_node.length {
@@ -512,10 +811,27 @@ impl PieceTree {
     }
     fn remove_right_most(&self, node: Rc<Node>) -> Rc<Node> {
         if node.right.as_ref().unwrap().clone() == self.black_leaf {
-            if node.color == Color::Black {
-                return self.double_black_leaf.clone();
+            let left = node.left.as_ref().unwrap().clone();
+            if left == self.black_leaf {
+                if node.color == Color::Black {
+                    return self.double_black_leaf.clone();
+                } else {
+                    return self.black_leaf.clone();
+                }
             } else {
-                return self.black_leaf.clone();
+                if node.color == Color::Black {
+                    let new_node = Rc::new(Node::new(
+                        left.start,
+                        left.length,
+                        left.buffer_type,
+                        left.color.plus_black(),
+                        left.left.clone(),
+                        left.right.clone(),
+                    ));
+                    return new_node;
+                } else {
+                    return left;
+                }
             }
         }
         let new_right = self.remove_right_most(node.right.as_ref().unwrap().clone());
@@ -980,6 +1296,7 @@ struct Node {
     color: Color,
     left_subtree_len: usize,
     subtree_len: usize,
+    black_height: usize,
     left: Option<Rc<Node>>,
     right: Option<Rc<Node>>,
 }
@@ -1008,6 +1325,16 @@ impl Node {
             Some(r) => r.subtree_len,
             None => 0,
         };
+        let child_blk_h = match left.as_ref() {
+            Some(l) => l.black_height,
+            None => 0,
+        };
+        let black_height = match color {
+            Color::NegativeBlack => child_blk_h,
+            Color::Red => child_blk_h,
+            Color::Black => child_blk_h + 1,
+            Color::DoubleBlack => child_blk_h,
+        };
         let subtree_len = left_subtree_len + length + right_subtree_len;
         Self {
             start,
@@ -1018,6 +1345,7 @@ impl Node {
             right,
             left_subtree_len,
             subtree_len,
+            black_height,
         }
     }
     fn new_black_leaf() -> Self {
@@ -1030,6 +1358,7 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
+            black_height: 0,
         }
     }
     fn new_double_black_leaf() -> Self {
@@ -1042,6 +1371,7 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
+            black_height: 0,
         }
     }
     fn left_color(&self) -> Color {
