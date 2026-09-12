@@ -658,5 +658,172 @@ mod tests {
             );
         }
     }
+
+    // ================ regressions found while reviewing the insert fix ================
+    //
+    // The commit that fixed mid-piece insertion left the delete path alone: a
+    // delete can still turn a valid tree into one that breaks the red-black
+    // invariants while leaving the document text correct. The tests below use
+    // `apply_edits_checked`, which asserts the invariants after every single
+    // edit, so each failure names the operation that broke the tree.
+
+    /// A red-red violation was left behind by the final delete. Every earlier
+    /// edit leaves the tree valid, so this pins the break on `delete`, not on
+    /// `insert`. Minimised from a randomised run; `get_text` stays correct even
+    /// while the tree is broken.
+    #[test]
+    fn test_delete_can_leave_a_red_red_violation() {
+        apply_edits_checked(
+            "",
+            &[
+                Edit::Ins("dca", 0),
+                Edit::Ins("abd", 1),
+                Edit::Ins("da", 4),
+                Edit::Ins("c", 1),
+                Edit::Ins("bccc", 2),
+                Edit::Del(11, 1),
+                Edit::Ins("c", 10),
+                Edit::Ins("baa", 9),
+                Edit::Ins("ab", 1),
+                Edit::Ins("caa", 7),
+                Edit::Del(13, 1),
+            ],
+        );
+    }
+
+    /// A zero-length insertion used to be treated as real work: it split the
+    /// piece it landed in and left a zero-length piece behind, and the delete
+    /// that followed then left a negative-black node and inconsistent black
+    /// heights. Dropping the `Ins("", 0)` from this sequence keeps the tree
+    /// valid, which is what pinned the zero-length piece as the trigger;
+    /// `insert` now returns early for empty input.
+    #[test]
+    fn test_zero_length_insert_then_delete_breaks_the_tree() {
+        apply_edits_checked(
+            "",
+            &[
+                Edit::Ins("xyyxyy", 0),
+                Edit::Ins("", 0),
+                Edit::Ins("yyyyxx", 2),
+                Edit::Ins("xxyyyy", 1),
+                Edit::Del(11, 1),
+            ],
+        );
+    }
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 11
+        }
+        fn below(&mut self, n: usize) -> usize {
+            if n == 0 {
+                0
+            } else {
+                (self.next() as usize) % n
+            }
+        }
+    }
+
+    /// One randomised run over a mixed insert/delete workload. Returns the
+    /// first operation after which the document text diverges or the tree
+    /// invariants break.
+    fn fuzz_run(seed: u64, steps: usize, inserts_only: bool) -> Result<(), String> {
+        let mut rng = Lcg(seed);
+        let mut pt = piece_tree::PieceTree::new("");
+        let mut reference = String::new();
+
+        for step in 0..steps {
+            let len = reference.len();
+            let op = rng.next() % 100;
+            let description: String;
+            if inserts_only || op < 45 || len == 0 {
+                let n = 1 + rng.below(4);
+                let snippet: String = (0..n)
+                    .map(|_| char::from(b'a' + rng.below(4) as u8))
+                    .collect();
+                let pos = rng.below(len + 1);
+                description = format!("insert({:?}, {})", snippet, pos);
+                pt.insert(&snippet, pos);
+                reference.insert_str(pos, &snippet);
+            } else if op < 60 {
+                description = format!("delete(0, {})", len);
+                pt.delete(0, len);
+                reference.clear();
+            } else {
+                let pos = rng.below(len);
+                let del = 1 + rng.below(len - pos);
+                description = format!("delete({}, {})", pos, del);
+                pt.delete(pos, del);
+                reference.replace_range(pos..pos + del, "");
+            }
+
+            if reference != get_text(&pt) {
+                return Err(format!(
+                    "step {step} ({description}): document text diverged\n  reference: {:?}\n  tree:      {:?}",
+                    reference,
+                    get_text(&pt)
+                ));
+            }
+            let report = pt.invariant_report();
+            if !report.is_ok() {
+                return Err(format!("step {step} ({description}):\n{}", report.summary()));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_seeds(seeds: u64, steps: usize, inserts_only: bool) -> Vec<String> {
+        let mut failures = Vec::new();
+        for seed in 1..=seeds {
+            let seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            if let Err(reason) = fuzz_run(seed, steps, inserts_only) {
+                failures.push(format!("seed {seed}: {reason}"));
+            }
+        }
+        failures
+    }
+
+    /// The in-repo invariant fuzz pins a single LCG stream, and that stream
+    /// happens to pass. These seeds do not: a delete in the middle one of them
+    /// leaves a red-red violation behind.
+    #[test]
+    fn test_fuzz_many_seeds_keep_the_tree_invariants() {
+        let failures = run_seeds(60, 200, false);
+        assert!(
+            failures.is_empty(),
+            "{} of 60 seeds end with a broken tree; first 3:\n{}\n",
+            failures.len(),
+            failures
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    /// Insert-only workload: after the mid-piece insertion fix this path is
+    /// sound, so this guards the rewrite rather than exposing a live bug.
+    #[test]
+    fn test_fuzz_insert_only_keeps_the_tree_invariants() {
+        let failures = run_seeds(60, 200, true);
+        assert!(
+            failures.is_empty(),
+            "{} of 60 insert-only seeds end with a broken tree; first 3:\n{}",
+            failures.len(),
+            failures
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }
 

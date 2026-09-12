@@ -64,6 +64,12 @@ impl PieceTree {
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
     }
     pub fn insert(&mut self, content: &str, index: usize) {
+        // A zero-length insertion has nothing to insert. Doing the work anyway
+        // splits the piece it lands in and leaves a zero-length piece behind,
+        // which the delete machinery then trips over.
+        if content.is_empty() {
+            return;
+        }
         let start = self.add.len();
         self.add.push_str(content);
         let node_info_to_insert = NodeInfo {
@@ -428,7 +434,7 @@ impl PieceTree {
         }
     }
     fn join(t1: Rc<Node>, pivot: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
-        if t1.black_height == t2.black_height {
+        let joined = if t1.black_height == t2.black_height {
             // The pivot is black here, so a `rebalance` can still repair a red-red
             // violation that arrived at the root of either input. Both inputs may carry
             // one pending violation at their root (that is the contract the recursive
@@ -448,6 +454,32 @@ impl PieceTree {
         } else {
             let target_black_height = t1.black_height;
             Self::insert_at_leftmost_with_target_black_height(t2, pivot, t1, target_black_height)
+        };
+
+        // The two recursive insertions above build a red node at the bottom of the
+        // spine they walk and repair red-red violations on the way back up, but
+        // `rebalance` is a no-op on a red node, so a violation can be left sitting
+        // at the *root* of the joined tree (a red node with a red child). Nothing
+        // above a join is guaranteed to look at that shape again -- `split` hands
+        // the joined tree straight back to its caller, and `delete` rebuilds the
+        // document from the pieces it gets -- so repair it here. Blackening the root
+        // always repairs it: a black node may have red children, and the children
+        // keep their equal black heights. The only cost is one extra black on every
+        // path, which callers cannot observe: black heights are only ever compared
+        // with each other, and the tree stays valid.
+        if joined.color == Color::Red
+            && (joined.left_color() == Color::Red || joined.right_color() == Color::Red)
+        {
+            Rc::new(Node::new(
+                joined.start,
+                joined.length,
+                joined.buffer_type,
+                Color::Black,
+                joined.left.clone(),
+                joined.right.clone(),
+            ))
+        } else {
+            joined
         }
     }
     fn split(&self, current_node: Rc<Node>, index: usize) -> (Rc<Node>, Rc<Node>) {
@@ -611,7 +643,6 @@ impl PieceTree {
         self.bubble(new_current_node)
     }
     fn find_right_most(&self, node: Rc<Node>) -> NodeInfo {
-        println!("color is {:#?}", node.color);
         let mut current = node;
         let mut dest = current.clone();
         while current != self.black_leaf {
