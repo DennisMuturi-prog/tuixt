@@ -72,8 +72,32 @@ impl PieceTree {
             color: Color::Red,
             buffer_type: BufferType::Add,
         };
+        if let Some(root_node) = self.root.as_ref().cloned() {
+            self.undo_stack.push(root_node);
+        }
+
+        // An insertion point that lands strictly inside a piece has to split that piece
+        // before anything can be inserted. The split is done by shrinking the piece to
+        // its leading part, which changes only its span: the node keeps its colour and
+        // both of its children, so the tree keeps its shape and its black heights and
+        // needs no repair. The trailing part is then inserted as a second, ordinary
+        // insertion. Both insertions therefore go through the piece-boundary path in
+        // `insert_node`, which is what keeps the red-black invariants intact: building
+        // the two halves and the new node by hand is what used to break the
+        // equal-black-height rule.
+        let trailing_part = self.shrink_piece_containing(index);
+
+        self.insert_info(node_info_to_insert, index);
+
+        if let Some(trailing_part) = trailing_part {
+            self.insert_info(trailing_part, index + content.len());
+        }
+    }
+
+    /// Insert one piece at a position that is a piece boundary, i.e. at the very
+    /// start of an existing piece, or at the very end of the document.
+    fn insert_info(&mut self, node_info_to_insert: NodeInfo, index: usize) {
         if let Some(root_node) = self.root.take() {
-            self.undo_stack.push(root_node.clone());
             let node_to_insert = Rc::new(Node::new(
                 node_info_to_insert.start,
                 node_info_to_insert.length,
@@ -139,6 +163,75 @@ impl PieceTree {
             self.root = Some(node_to_insert);
         }
     }
+    /// If `index` falls strictly inside one piece, shrink that piece to its leading
+    /// part and return the trailing part, ready to be inserted after the new text.
+    /// Shrinking changes only the piece's span: the node keeps its colour and both of
+    /// its children, so every red-black invariant is preserved and nothing needs to
+    /// be rebalanced. Returns `None` when `index` is already a piece boundary or
+    /// beyond the end of the document, in which case there is nothing to split.
+    fn shrink_piece_containing(&mut self, index: usize) -> Option<NodeInfo> {
+        let root = self.root.as_ref()?.clone();
+        let (shrunk_root, trailing_part) = self.shrink_piece(root, index)?;
+        self.root = Some(shrunk_root);
+        Some(trailing_part)
+    }
+
+    /// Walks down to the piece that strictly contains `index`, if there is one, and
+    /// returns the rebuilt path together with the trailing part of the split piece.
+    fn shrink_piece(&self, curr_node: Rc<Node>, index: usize) -> Option<(Rc<Node>, NodeInfo)> {
+        if index >= curr_node.subtree_len {
+            return None;
+        }
+        if index < curr_node.left_subtree_len {
+            let (new_left, trailing_part) =
+                self.shrink_piece(curr_node.left.as_ref().unwrap().clone(), index)?;
+            let rebuilt = Rc::new(Node::new(
+                curr_node.start,
+                curr_node.length,
+                curr_node.buffer_type,
+                curr_node.color,
+                Some(new_left),
+                curr_node.right.clone(),
+            ));
+            Some((rebuilt, trailing_part))
+        } else if index > curr_node.left_subtree_len + curr_node.length {
+            let inner_index = index - curr_node.left_subtree_len - curr_node.length;
+            let (new_right, trailing_part) =
+                self.shrink_piece(curr_node.right.as_ref().unwrap().clone(), inner_index)?;
+            let rebuilt = Rc::new(Node::new(
+                curr_node.start,
+                curr_node.length,
+                curr_node.buffer_type,
+                curr_node.color,
+                curr_node.left.clone(),
+                Some(new_right),
+            ));
+            Some((rebuilt, trailing_part))
+        } else if index == curr_node.left_subtree_len
+            || index == curr_node.left_subtree_len + curr_node.length
+        {
+            // already a piece boundary
+            None
+        } else {
+            let offset_in_node = index - curr_node.left_subtree_len;
+            let leading_part = Rc::new(Node::new(
+                curr_node.start,
+                offset_in_node,
+                curr_node.buffer_type,
+                curr_node.color,
+                curr_node.left.clone(),
+                curr_node.right.clone(),
+            ));
+            let trailing_part = NodeInfo {
+                start: curr_node.start + offset_in_node,
+                length: curr_node.length - offset_in_node,
+                color: Color::Red,
+                buffer_type: curr_node.buffer_type,
+            };
+            Some((leading_part, trailing_part))
+        }
+    }
+
     fn insert_node(&self, curr_node: Rc<Node>, node_to_insert: NodeInfo, index: usize) -> Rc<Node> {
         if index < curr_node.left_subtree_len {
             let new_left = self.insert_node(
@@ -172,8 +265,16 @@ impl PieceTree {
             ));
             Self::rebalance(new_current_node)
         } else {
-            let offset_in_node = index - curr_node.left_subtree_len;
-            if offset_in_node == 0 {
+            let _offset_in_node = index - curr_node.left_subtree_len;
+            // `insert` splits any piece that the insertion point falls inside before
+            // calling here, so `index` is always on a piece boundary and the only
+            // remaining mid-piece case is "insert immediately in front of this node".
+            debug_assert_eq!(
+                _offset_in_node, 0,
+                "insert_node reached an index inside a piece (offset {})",
+                _offset_in_node
+            );
+            {
                 let node_to_insert = Rc::new(Node::new(
                     node_to_insert.start,
                     node_to_insert.length,
@@ -205,46 +306,6 @@ impl PieceTree {
                     ));
                     Self::rebalance(new_current_node)
                 }
-            } else {
-                let first_part = Rc::new(Node::new(
-                    curr_node.start,
-                    offset_in_node,
-                    curr_node.buffer_type,
-                    curr_node.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-
-                let left = curr_node.left.as_ref().unwrap().clone();
-                let new_left: Option<Rc<Node>> = if left == self.black_leaf {
-                    Some(first_part)
-                } else {
-                    Some(self.insert_as_predecessor(left, first_part))
-                };
-
-                let second_part = Rc::new(Node::new(
-                    curr_node.start + offset_in_node,
-                    curr_node.length - offset_in_node,
-                    curr_node.buffer_type,
-                    curr_node.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                let right = curr_node.right.as_ref().unwrap().clone();
-                let new_right: Option<Rc<Node>> = if right == self.black_leaf {
-                    Some(second_part)
-                } else {
-                    Some(self.insert_as_successor(right, second_part))
-                };
-                let new_node = Rc::new(Node::new(
-                    node_to_insert.start,
-                    node_to_insert.length,
-                    node_to_insert.buffer_type,
-                    node_to_insert.color,
-                    new_left,
-                    new_right,
-                ));
-                Self::rebalance(new_node)
             }
         }
     }
@@ -368,14 +429,19 @@ impl PieceTree {
     }
     fn join(t1: Rc<Node>, pivot: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
         if t1.black_height == t2.black_height {
-            Rc::new(Node::new(
+            // The pivot is black here, so a `rebalance` can still repair a red-red
+            // violation that arrived at the root of either input. Both inputs may carry
+            // one pending violation at their root (that is the contract the recursive
+            // join relies on); embedding them under the new pivot without repairing
+            // would push that violation one level deeper, where no later repair looks.
+            Self::rebalance(Rc::new(Node::new(
                 pivot.start,
                 pivot.length,
                 pivot.buffer_type,
                 Color::Black,
                 Some(t1),
                 Some(t2),
-            ))
+            )))
         } else if t1.black_height > t2.black_height {
             let target_black_height = t2.black_height;
             Self::insert_at_rightmost_with_target_black_height(t1, pivot, t2, target_black_height)
@@ -484,31 +550,6 @@ impl PieceTree {
         ));
         Self::join(t1, pivot, t2)
     }
-    fn insert_as_successor(&self, curr_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
-        if curr_node.left.as_ref().unwrap().clone() == self.black_leaf {
-            let new_node = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                Some(node_to_insert),
-                curr_node.right.clone(),
-            ));
-            return Self::rebalance(new_node);
-        }
-        let left_path =
-            self.insert_as_successor(curr_node.left.as_ref().unwrap().clone(), node_to_insert);
-        let new_node = Rc::new(Node::new(
-            curr_node.start,
-            curr_node.length,
-            curr_node.buffer_type,
-            curr_node.color,
-            Some(left_path),
-            curr_node.right.clone(),
-        ));
-        Self::rebalance(new_node)
-    }
-
     fn insert_as_predecessor(&self, curr_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
         if curr_node.right.as_ref().unwrap().clone() == self.black_leaf {
             let new_node = Rc::new(Node::new(
@@ -884,6 +925,13 @@ impl Node {
         left: Option<Rc<Node>>,
         right: Option<Rc<Node>>,
     ) -> Self {
+        // Only the two leaf constructors may omit children; every other node must
+        // point at real subtrees. Copying a leaf's `None` children into a regular
+        // node is what produced the "phantom" nodes that broke traversal.
+        debug_assert!(
+            left.is_some() && right.is_some(),
+            "Node::new called without children (only the black/double-black leaf constructors may do that)"
+        );
         let left_subtree_len = match left.as_ref() {
             Some(l) => l.subtree_len,
             None => 0,
