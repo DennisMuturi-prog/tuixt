@@ -601,210 +601,7 @@ impl PieceTree {
             return new_y;
         }
         Self::rebalance(y)
-    }
-
-    fn bubble_legacy(y: Rc<Node>) -> Rc<Node> {
-        if y.color == Color::Black
-            && y.right_color() == Color::DoubleBlack
-            && y.left_color() == Color::Black
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::Red,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::Black,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::DoubleBlack,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        } else if y.color == Color::Red
-            && y.right_color() == Color::DoubleBlack
-            && y.left_color() == Color::Black
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::Red,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::Black,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::Black,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        } else if y.color == Color::Black
-            && y.right_color() == Color::DoubleBlack
-            && y.left_color() == Color::Red
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::NegativeBlack,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::Black,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::DoubleBlack,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        } else if y.color == Color::Black
-            && y.left_color() == Color::DoubleBlack
-            && y.right_color() == Color::Black
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::Black,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::Red,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::DoubleBlack,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        } else if y.color == Color::Red
-            && y.left_color() == Color::DoubleBlack
-            && y.right_color() == Color::Black
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::Black,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::Red,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::Black,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        } else if y.color == Color::Black
-            && y.left_color() == Color::DoubleBlack
-            && y.right_color() == Color::Red
-        {
-            let x = y.left.as_ref().unwrap().clone();
-            let z = y.right.as_ref().unwrap().clone();
-            let new_x = Rc::new(Node::new(
-                x.start,
-                x.length,
-                x.buffer_type,
-                Color::Black,
-                x.left.clone(),
-                x.right.clone(),
-            ));
-            let new_z = Rc::new(Node::new(
-                z.start,
-                z.length,
-                z.buffer_type,
-                Color::NegativeBlack,
-                z.left.clone(),
-                z.right.clone(),
-            ));
-
-            let new_y = Rc::new(Node::new(
-                y.start,
-                y.length,
-                y.buffer_type,
-                Color::DoubleBlack,
-                Some(new_x),
-                Some(new_z),
-            ));
-            let new_y = Self::rebalance(new_y);
-            return new_y;
-        }
-        Self::rebalance(y)
-    }
+    } 
     fn rebalance(z: Rc<Node>) -> Rc<Node> {
         if z.color == Color::Black || z.color == Color::DoubleBlack {
             let z_original_color = z.color;
@@ -1054,15 +851,15 @@ impl PieceTree {
         if node == &self.double_black_leaf {
             panic!("cannot blacken a double black leaf");
         }
-        let new_node = Rc::new(Node::new(
+        
+        Rc::new(Node::new(
             node.start,
             node.length,
             node.buffer_type,
             node.color.plus_black(),
             node.right.clone(),
             node.right.clone(),
-        ));
-        return new_node;
+        ))
     }
 }
 #[derive(PartialEq, Debug)]
@@ -1238,9 +1035,4 @@ impl Color {
             }
         }
     }
-}
-
-struct DeleteMetaData {
-    new_node: Rc<Node>,
-    new_length: usize,
 }
