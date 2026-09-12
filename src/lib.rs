@@ -424,5 +424,239 @@ mod tests {
             );
         }
     }
+
+    // ================= regression tests for the known tree bugs =================
+    //
+    // These drive the public API only, and they FAIL on the current revision.
+    // They are written to pass once the tree invariant is restored, so they
+    // double as the acceptance test for a fix.
+    //
+    // The invariant that is broken: in a red-black tree both children of every
+    // node must have the same black height, and a red node may not have a red
+    // child. Inserting *inside* an existing piece takes the middle branch of
+    // `PieceTree::insert_node`: it splits the piece in two, gives both halves
+    // the color of the piece being split, and hangs them where that piece's
+    // black leaves used to be, while the new middle node keeps the inserted
+    // node's color (red). If the split piece is black, each half is a black
+    // node sitting where a black leaf was, so those paths gain a black; and
+    // the replacement node drops the black that the split piece contributed.
+    // Nothing red is involved in either change, so `rebalance` -- which only
+    // looks for a red child of a red node -- never sees the violation. The
+    // text stays correct (in-order traversal ignores colors), which is why the
+    // differential tests cannot catch it. It surfaces later, inside `delete`,
+    // when joining subtrees uses a black height the tree can no longer honor.
+    //
+    // Each sequence below was minimized by greedy removal from a 2000-op
+    // randomized run against the current revision. Each one panics today.
+
+    #[derive(Debug)]
+    enum Edit {
+        Ins(&'static str, usize),
+        Del(usize, usize),
+    }
+
+    /// Apply an edit sequence to a fresh tree while keeping a reference model
+    /// in sync, the same way the differential tests do. A panic anywhere
+    /// inside the piece tree fails the test, which is the point of these
+    /// tests; the final assert also guards that the document text is right.
+    fn apply_edits(initial: &str, edits: &[Edit]) -> String {
+        let mut pt = piece_tree::PieceTree::new(initial);
+        let mut reference = String::from(initial);
+        for edit in edits {
+            match *edit {
+                Edit::Ins(text, at) => {
+                    pt.insert(text, at);
+                    reference.insert_str(at, text);
+                }
+                Edit::Del(at, len) => {
+                    pt.delete(at, len);
+                    reference.replace_range(at..at + len, "");
+                }
+            }
+        }
+        assert_eq!(reference, get_text(&pt), "document text diverged");
+        reference
+    }
+
+    /// Panic site 1 of 2: `insert_at_leftmost_with_target_black_height`
+    /// descends past the black leaf and unwraps it (src/piece_tree.rs:354),
+    /// reached from `join` <- `split` <- `delete`. 8 edits from an empty
+    /// document are enough.
+    #[test]
+    fn test_delete_should_not_walk_past_black_leaf() {
+        apply_edits(
+            "",
+            &[
+                Edit::Ins("(263:3)", 0),
+                Edit::Ins("(264:11)", 1),
+                Edit::Ins("(270:77)", 8),
+                Edit::Ins("(271:69)", 2),
+                Edit::Ins("(272:82)", 26),
+                Edit::Del(3, 20),
+                Edit::Del(9, 1),
+                Edit::Del(3, 1),
+            ],
+        );
+    }
+
+    /// Same panic site, reached from a non-empty initial document and through a
+    /// different mix of edits (8 edits).
+    #[test]
+    fn test_delete_should_not_walk_past_black_leaf_nonempty_document() {
+        apply_edits(
+            "hello world",
+            &[
+                Edit::Del(1, 1),
+                Edit::Ins("(287:70)", 4),
+                Edit::Del(10, 1),
+                Edit::Ins("(289:68)", 8),
+                Edit::Ins("(290:84)", 13),
+                Edit::Del(13, 3),
+                Edit::Ins("(293:61)", 10),
+                Edit::Del(9, 24),
+            ],
+        );
+    }
+
+    /// Panic site 2 of 2: a negative-black marker survives an operation and is
+    /// reddened again, which `Color::minus_black` forbids
+    /// (src/piece_tree.rs:1032). 7 edits.
+    #[test]
+    fn test_delete_should_not_redden_a_negative_black() {
+        apply_edits(
+            "The quick brown fox jumps over the lazy dog",
+            &[
+                Edit::Ins("(357:28)", 1),
+                Edit::Ins("(364:63)", 2),
+                Edit::Del(8, 1),
+                Edit::Ins("(367:17)", 3),
+                Edit::Ins("(368:31)", 10),
+                Edit::Del(11, 6),
+                Edit::Del(8, 10),
+            ],
+        );
+    }
+
+    /// Like `apply_edits`, but asserts the tree invariants after every single
+    /// operation, so the first edit that breaks the tree is named in the
+    /// failure message. This is the test-side counterpart of the tree's own
+    /// invariant: colors and black heights never affect the document text, so
+    /// a text comparison alone cannot see a broken tree.
+    fn apply_edits_checked(initial: &str, edits: &[Edit]) -> String {
+        let mut pt = piece_tree::PieceTree::new(initial);
+        let mut reference = String::from(initial);
+        for (i, edit) in edits.iter().enumerate() {
+            match *edit {
+                Edit::Ins(text, at) => {
+                    pt.insert(text, at);
+                    reference.insert_str(at, text);
+                }
+                Edit::Del(at, len) => {
+                    pt.delete(at, len);
+                    reference.replace_range(at..at + len, "");
+                }
+            }
+            assert_eq!(
+                reference,
+                get_text(&pt),
+                "document text diverged after edit #{} ({:?})",
+                i,
+                edit
+            );
+            let report = pt.invariant_report();
+            assert!(
+                report.is_ok(),
+                "red-black invariants broken after edit #{} ({:?}):\n{}",
+                i,
+                edit,
+                report.summary()
+            );
+        }
+        reference
+    }
+
+    /// The bug at its source: an insertion that lands inside an existing piece
+    /// splits that piece in two and hangs the halves - colored like the piece
+    /// that was split - where its black leaves used to be, which changes the
+    /// black height of those paths. Nothing red is involved, so the repair
+    /// routine never notices, and the document text stays correct.
+    ///
+    /// Same 8-edit sequence as `test_delete_should_not_walk_past_black_leaf`,
+    /// which shows the crash it eventually causes; here the test stops at the
+    /// first edit that breaks the tree.
+    #[test]
+    fn test_insert_inside_a_piece_breaks_the_tree_invariants() {
+        apply_edits_checked(
+            "",
+            &[
+                Edit::Ins("(263:3)", 0),
+                Edit::Ins("(264:11)", 1),
+                Edit::Ins("(270:77)", 8),
+                Edit::Ins("(271:69)", 2),
+                Edit::Ins("(272:82)", 26),
+                Edit::Del(3, 20),
+                Edit::Del(9, 1),
+                Edit::Del(3, 1),
+            ],
+        );
+    }
+
+    /// The same corruption occurs on the operation stream of
+    /// `test_fuzz_large_differential_with_large_deletions`, using its exact
+    /// LCG. That test compares document text only, so it passes while the tree
+    /// is invalid; here the invariants are asserted after every step.
+    #[test]
+    fn test_fuzz_sequence_keeps_the_tree_invariants() {
+        let mut pt = piece_tree::PieceTree::new("abcdefghijklmnopqrstuvwxyz");
+        let mut reference = String::from("abcdefghijklmnopqrstuvwxyz");
+
+        let mut rng: u64 = 0xCAFEBABEDEADBEEF;
+        let mut next_rand = || -> u64 {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            rng
+        };
+
+        for step in 0..1000 {
+            let current_len = reference.len();
+            let op = next_rand() % 3;
+            let description: String;
+            if op == 0 || current_len == 0 {
+                let pos = if current_len == 0 {
+                    0
+                } else {
+                    (next_rand() as usize) % (current_len + 1)
+                };
+                let snippet = format!("({}:{})", step, next_rand() % 100);
+                description = format!("insert({:?}, {})", snippet, pos);
+                pt.insert(&snippet, pos);
+                reference.insert_str(pos, &snippet);
+            } else {
+                let pos = (next_rand() as usize) % current_len;
+                let max_len = current_len - pos;
+                let del_len = ((next_rand() as usize) % max_len) + 1;
+                description = format!("delete({}, {})", pos, del_len);
+                pt.delete(pos, del_len);
+                reference.replace_range(pos..pos + del_len, "");
+            }
+
+            assert_eq!(
+                reference,
+                get_text(&pt),
+                "document text diverged at step {} ({})",
+                step,
+                description
+            );
+            let report = pt.invariant_report();
+            assert!(
+                report.is_ok(),
+                "red-black invariants broken after step {} ({}):\n{}",
+                step,
+                description,
+                report.summary()
+            );
+        }
+    }
 }
 

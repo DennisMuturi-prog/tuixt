@@ -1047,3 +1047,173 @@ impl Color {
         }
     }
 }
+
+// ============================================================================
+// Test-only structural accessors.
+//
+// These exist so tests can assert the red-black invariants by inspecting the
+// tree, instead of only comparing the document text (which is unaffected by
+// colors and black heights, and therefore cannot see a broken tree). They are
+// compiled only under `cfg(test)` and add no behavior to the library.
+// ============================================================================
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub struct InvariantReport {
+    /// number of internal nodes visited
+    pub nodes: usize,
+    /// deepest internal node count along any path
+    pub max_depth: usize,
+    /// black height of the root (0 when the tree is empty)
+    pub root_black_height: i32,
+    /// every invariant that was found broken (capped; see `violation_count`)
+    pub violations: Vec<String>,
+    /// total number of violations, including any not listed in `violations`
+    pub violation_count: usize,
+}
+
+#[cfg(test)]
+const MAX_REPORTED_VIOLATIONS: usize = 50;
+
+#[cfg(test)]
+impl InvariantReport {
+    /// True when the tree satisfies every red-black invariant.
+    pub fn is_ok(&self) -> bool {
+        self.violation_count == 0
+    }
+
+    fn violate(&mut self, message: String) {
+        self.violation_count += 1;
+        if self.violations.len() < MAX_REPORTED_VIOLATIONS {
+            self.violations.push(message);
+        }
+    }
+
+    /// Human readable report, for assertion messages.
+    pub fn summary(&self) -> String {
+        let mut out = format!(
+            "{} violation(s), {} node(s), max depth {}, root black height {}\n",
+            self.violation_count, self.nodes, self.max_depth, self.root_black_height
+        );
+        for v in &self.violations {
+            out.push_str("  - ");
+            out.push_str(v);
+            out.push('\n');
+        }
+        if self.violation_count > self.violations.len() {
+            out.push_str(&format!(
+                "  ... and {} more\n",
+                self.violation_count - self.violations.len()
+            ));
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+impl PieceTree {
+    /// Test-only: walk the tree and report every red-black invariant it breaks.
+    ///
+    /// Checked: the root is black; no double-black or negative-black marker
+    /// survives an operation; a red node has no red child; both children of a
+    /// node have equal black height; each stored `black_height` matches the
+    /// color and children it was derived from; `subtree_len` and
+    /// `left_subtree_len` match the actual subtrees; and no non-sentinel node
+    /// is childless (the "phantom node" failure mode).
+    pub fn invariant_report(&self) -> InvariantReport {
+        let mut report = InvariantReport::default();
+        if let Some(root) = self.root.as_ref() {
+            report.root_black_height = self.check_node(Some(root), true, 0, &mut report);
+        }
+        report
+    }
+
+    /// Returns the subtree's black height (external leaf = 0).
+    fn check_node(
+        &self,
+        node: Option<&Rc<Node>>,
+        is_root: bool,
+        depth: usize,
+        report: &mut InvariantReport,
+    ) -> i32 {
+        let node = match node {
+            None => {
+                report.violate(
+                    "child pointer is None; an absent child must be the black leaf".to_string(),
+                );
+                return 0;
+            }
+            Some(node) => node,
+        };
+
+        if std::rc::Rc::ptr_eq(node, &self.black_leaf) {
+            return 0; // external leaf: black by definition, black height 0
+        }
+        if std::rc::Rc::ptr_eq(node, &self.double_black_leaf) {
+            report.violate("the double-black leaf is reachable from the root".to_string());
+            return 0;
+        }
+
+        report.nodes += 1;
+        if depth + 1 > report.max_depth {
+            report.max_depth = depth + 1;
+        }
+        let at = format!("(start={}, len={})", node.start, node.length);
+
+        if node.color == Color::DoubleBlack {
+            report.violate(format!("double-black node left in the tree at rest {}", at));
+        }
+        if node.color == Color::NegativeBlack {
+            report.violate(format!("negative-black node left in the tree at rest {}", at));
+        }
+        if is_root && node.color != Color::Black {
+            report.violate(format!("root is not black (color={:?})", node.color));
+        }
+        if node.left.is_none() || node.right.is_none() {
+            report.violate(format!(
+                "childless node that is not the black leaf {} (\"phantom\" node)",
+                at
+            ));
+            return 0;
+        }
+
+        let left = node.left.as_ref().unwrap();
+        let right = node.right.as_ref().unwrap();
+        let left_bh = self.check_node(Some(left), false, depth + 1, report);
+        let right_bh = self.check_node(Some(right), false, depth + 1, report);
+
+        if node.color == Color::Red && (left.color == Color::Red || right.color == Color::Red) {
+            report.violate(format!(
+                "red node with a red child (red-red violation) {}",
+                at
+            ));
+        }
+        if left_bh != right_bh {
+            report.violate(format!(
+                "children have different black heights {}: left={}, right={}",
+                at, left_bh, right_bh
+            ));
+        }
+        let derived_bh = left_bh + if node.color == Color::Black { 1 } else { 0 };
+        if node.black_height != derived_bh {
+            report.violate(format!(
+                "stored black_height is inconsistent {}: stored={}, derived from children={}",
+                at, node.black_height, derived_bh
+            ));
+        }
+        if node.left_subtree_len != left.subtree_len {
+            report.violate(format!(
+                "left_subtree_len stale {}: stored={}, actual={}",
+                at, node.left_subtree_len, left.subtree_len
+            ));
+        }
+        let derived_len = left.subtree_len + node.length + right.subtree_len;
+        if node.subtree_len != derived_len {
+            report.violate(format!(
+                "subtree_len stale {}: stored={}, actual={}",
+                at, node.subtree_len, derived_len
+            ));
+        }
+
+        derived_bh
+    }
+}
