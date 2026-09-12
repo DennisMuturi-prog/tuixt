@@ -601,7 +601,7 @@ impl PieceTree {
             return new_y;
         }
         Self::rebalance(y)
-    } 
+    }
     fn rebalance(z: Rc<Node>) -> Rc<Node> {
         if z.color == Color::Black || z.color == Color::DoubleBlack {
             let z_original_color = z.color;
@@ -743,7 +743,7 @@ impl PieceTree {
         }
         if z.color == Color::DoubleBlack
             && z.left_color() == Color::NegativeBlack
-            && z.left_right_color() == Color::Black
+            && z.left.as_ref().unwrap().has_legimate_black_internal_children()
         {
             let x = z.left.as_ref().unwrap().clone();
             let w = x.left.as_ref().unwrap().clone();
@@ -784,7 +784,7 @@ impl PieceTree {
             return new_y;
         } else if z.color == Color::DoubleBlack
             && z.right_color() == Color::NegativeBlack
-            && z.right_left_color() == Color::Black
+            && z.right.as_ref().unwrap().has_legimate_black_internal_children()
         {
             let x = z;
             let z = x.right.as_ref().unwrap().clone();
@@ -829,12 +829,12 @@ impl PieceTree {
     }
     fn redder(&self, node: &Rc<Node>) -> Rc<Node> {
         if node == &self.black_leaf {
-            return  self.black_leaf.clone();
+            return self.black_leaf.clone();
         }
         if node == &self.double_black_leaf {
             return self.black_leaf.clone();
         }
-        
+
         Rc::new(Node::new(
             node.start,
             node.length,
@@ -851,7 +851,7 @@ impl PieceTree {
         if node == &self.double_black_leaf {
             panic!("cannot blacken a double black leaf");
         }
-        
+
         Rc::new(Node::new(
             node.start,
             node.length,
@@ -873,13 +873,6 @@ struct Node {
     black_height: i32,
     left: Option<Rc<Node>>,
     right: Option<Rc<Node>>,
-}
-
-struct NodeInfo {
-    start: usize,
-    length: usize,
-    color: Color,
-    buffer_type: BufferType,
 }
 
 impl Node {
@@ -998,6 +991,24 @@ impl Node {
             None => Color::Black,
         }
     }
+    fn has_legimate_black_internal_children(&self) -> bool {
+        let left = match self.left.as_ref() {
+            Some(l) => {l.length>0 && l.color == Color::Black},
+            None => false,
+        };
+        let right = match self.right.as_ref() {
+            Some(r) => {r.length>0 && r.color == Color::Black},
+            None => false,
+        };
+        left && right
+    }
+}
+
+struct NodeInfo {
+    start: usize,
+    length: usize,
+    color: Color,
+    buffer_type: BufferType,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

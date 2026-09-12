@@ -280,4 +280,149 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_delete_on_empty_tree() {
+        let mut pt = piece_tree::PieceTree::new("");
+        pt.delete(0, 5);
+        assert_eq!("", get_text(&pt));
+        pt.delete(10, 5);
+        assert_eq!("", get_text(&pt));
+    }
+
+    #[test]
+    fn test_out_of_bounds_deletion() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        // Deleting from an index past the end
+        pt.delete(10, 2);
+        assert_eq!("hello", get_text(&pt));
+
+        // Deleting length that extends past the end
+        pt.delete(3, 50);
+        assert_eq!("hel", get_text(&pt));
+    }
+
+    #[test]
+    fn test_out_of_bounds_insertion() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        // Inserting at an index well past the end
+        pt.insert(" world", 100);
+        assert_eq!("hello world", get_text(&pt));
+    }
+
+    #[test]
+    fn test_delete_spanning_multiple_pieces() {
+        let mut pt = piece_tree::PieceTree::new("ABC");
+        pt.insert("DEF", 3);
+        pt.insert("GHI", 6);
+        pt.insert("JKL", 9);
+        assert_eq!("ABCDEFGHIJKL", get_text(&pt));
+
+        // Delete from 'B' (index 1) to 'K' (index 10, length 10)
+        // Should leave "AL"
+        pt.delete(1, 10);
+        assert_eq!("AL", get_text(&pt));
+    }
+
+    #[test]
+    fn test_unicode_multibyte_characters() {
+        // "🦀" is 4 bytes: [0xF0, 0x9F, 0xA6, 0x80]
+        let mut pt = piece_tree::PieceTree::new("hello 🦀 world");
+        assert_eq!("hello 🦀 world", get_text(&pt));
+
+        // Insert at char boundary (byte 11, after "hello 🦀 ")
+        pt.insert("beautiful ", 11);
+        assert_eq!("hello 🦀 beautiful world", get_text(&pt));
+
+        // Delete the emoji and following space (byte 6, length 5)
+        pt.delete(6, 5);
+        assert_eq!("hello beautiful world", get_text(&pt));
+    }
+
+
+
+    #[test]
+    fn test_unicode_invalid_byte_split() {
+        // Test what happens if split/delete/insert lands on a non-char boundary
+        let mut pt = piece_tree::PieceTree::new("🦀");
+        // "🦀" has byte length 4. Splitting at byte index 2 is invalid UTF-8.
+        pt.insert("X", 2);
+        let mut text = String::new();
+        // Since Rust String indexing requires valid UTF-8 char boundaries,
+        // slicing non-char boundary in get_text should panic or fail.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pt.get_text(&mut text);
+        }));
+        // If the implementation is purely byte-based, slicing at byte 2 of a 4-byte UTF-8 char panics:
+        assert!(result.is_err(), "Expected panic when slicing non-char boundary in UTF-8 string");
+    }
+
+    #[test]
+    fn test_alternating_prepend_append_balance() {
+        let mut pt = piece_tree::PieceTree::new("init");
+        for i in 0..100 {
+            pt.insert(&format!("<{}>", i), 0);
+            let len = get_text(&pt).len();
+            pt.insert(&format!("[{}]", i), len);
+        }
+        let text = get_text(&pt);
+        assert!(text.starts_with("<99>"));
+        assert!(text.ends_with("[99]"));
+    }
+
+    #[test]
+    fn test_delete_all_from_front_one_by_one() {
+        let text = "abcdefghijklmnopqrstuvwxyz";
+        let mut pt = piece_tree::PieceTree::new(text);
+        let mut current = text.to_string();
+        while !current.is_empty() {
+            pt.delete(0, 1);
+            current.remove(0);
+            assert_eq!(current, get_text(&pt));
+        }
+        assert_eq!("", get_text(&pt));
+    }
+
+    #[test]
+    fn test_fuzz_large_differential_with_large_deletions() {
+        let mut pt = piece_tree::PieceTree::new("abcdefghijklmnopqrstuvwxyz");
+        let mut reference = String::from("abcdefghijklmnopqrstuvwxyz");
+
+        let mut rng: u64 = 0xCAFEBABEDEADBEEF;
+        let mut next_rand = || -> u64 {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng
+        };
+
+        for step in 0..1000 {
+            let current_len = reference.len();
+            let op = next_rand() % 3;
+
+            if op == 0 || current_len == 0 {
+                // Insert random snippet at random position
+                let pos = if current_len == 0 { 0 } else { (next_rand() as usize) % (current_len + 1) };
+                let snippet = format!("({}:{})", step, next_rand() % 100);
+                pt.insert(&snippet, pos);
+                reference.insert_str(pos, &snippet);
+            } else {
+                // Delete: allow large deletions spanning multiple pieces
+                let pos = (next_rand() as usize) % current_len;
+                let max_len = current_len - pos;
+                // Allow deleting up to max_len (large chunks)
+                let del_len = ((next_rand() as usize) % max_len) + 1;
+                pt.delete(pos, del_len);
+                reference.replace_range(pos..pos + del_len, "");
+            }
+
+            assert_eq!(
+                reference,
+                get_text(&pt),
+                "Mismatch at step {}: reference len = {}, pt len = {}",
+                step,
+                reference.len(),
+                get_text(&pt).len()
+            );
+        }
+    }
 }
+
