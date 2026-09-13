@@ -62,259 +62,7 @@ impl PieceTree {
         };
         content.push_str(content_str);
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
-    }
-    pub fn insert(&mut self, content: &str, index: usize) {
-        // A zero-length insertion has nothing to insert. Doing the work anyway
-        // splits the piece it lands in and leaves a zero-length piece behind,
-        // which the delete machinery then trips over.
-        if content.is_empty() {
-            return;
-        }
-        let start = self.add.len();
-        self.add.push_str(content);
-        let node_info_to_insert = NodeInfo {
-            start,
-            length: content.len(),
-            color: Color::Red,
-            buffer_type: BufferType::Add,
-        };
-        if let Some(root_node) = self.root.as_ref().cloned() {
-            self.undo_stack.push(root_node);
-        }
-
-        // An insertion point that lands strictly inside a piece has to split that piece
-        // before anything can be inserted. The split is done by shrinking the piece to
-        // its leading part, which changes only its span: the node keeps its colour and
-        // both of its children, so the tree keeps its shape and its black heights and
-        // needs no repair. The trailing part is then inserted as a second, ordinary
-        // insertion. Both insertions therefore go through the piece-boundary path in
-        // `insert_node`, which is what keeps the red-black invariants intact: building
-        // the two halves and the new node by hand is what used to break the
-        // equal-black-height rule.
-        let trailing_part = self.shrink_piece_containing(index);
-
-        self.insert_info(node_info_to_insert, index);
-
-        if let Some(trailing_part) = trailing_part {
-            self.insert_info(trailing_part, index + content.len());
-        }
-    }
-
-    /// Insert one piece at a position that is a piece boundary, i.e. at the very
-    /// start of an existing piece, or at the very end of the document.
-    fn insert_info(&mut self, node_info_to_insert: NodeInfo, index: usize) {
-        if let Some(root_node) = self.root.take() {
-            let node_to_insert = Rc::new(Node::new(
-                node_info_to_insert.start,
-                node_info_to_insert.length,
-                node_info_to_insert.buffer_type,
-                node_info_to_insert.color,
-                Some(self.black_leaf.clone()),
-                Some(self.black_leaf.clone()),
-            ));
-            if index >= root_node.subtree_len {
-                let right = root_node.right.as_ref().unwrap().clone();
-                if right == self.black_leaf {
-                    let new_current_node = Rc::new(Node::new(
-                        root_node.start,
-                        root_node.length,
-                        root_node.buffer_type,
-                        root_node.color,
-                        root_node.left.clone(),
-                        Some(node_to_insert),
-                    ));
-                    self.root = Some(new_current_node);
-                } else {
-                    let new_right = self.insert_as_predecessor(right, node_to_insert);
-                    let new_current_node = Rc::new(Node::new(
-                        root_node.start,
-                        root_node.length,
-                        root_node.buffer_type,
-                        root_node.color,
-                        root_node.left.clone(),
-                        Some(new_right),
-                    ));
-                    let new_root = Self::rebalance(new_current_node);
-                    let new_current_node = Rc::new(Node::new(
-                        new_root.start,
-                        new_root.length,
-                        new_root.buffer_type,
-                        Color::Black,
-                        new_root.left.clone(),
-                        new_root.right.clone(),
-                    ));
-                    self.root = Some(new_current_node);
-                }
-            } else {
-                let new_root = self.insert_node(root_node.clone(), node_info_to_insert, index);
-                let new_current_node = Rc::new(Node::new(
-                    new_root.start,
-                    new_root.length,
-                    new_root.buffer_type,
-                    Color::Black,
-                    new_root.left.clone(),
-                    new_root.right.clone(),
-                ));
-                self.root = Some(new_current_node);
-            }
-        } else {
-            let node_to_insert = Rc::new(Node::new(
-                node_info_to_insert.start,
-                node_info_to_insert.length,
-                node_info_to_insert.buffer_type,
-                Color::Black,
-                Some(self.black_leaf.clone()),
-                Some(self.black_leaf.clone()),
-            ));
-            self.root = Some(node_to_insert);
-        }
-    }
-    /// If `index` falls strictly inside one piece, shrink that piece to its leading
-    /// part and return the trailing part, ready to be inserted after the new text.
-    /// Shrinking changes only the piece's span: the node keeps its colour and both of
-    /// its children, so every red-black invariant is preserved and nothing needs to
-    /// be rebalanced. Returns `None` when `index` is already a piece boundary or
-    /// beyond the end of the document, in which case there is nothing to split.
-    fn shrink_piece_containing(&mut self, index: usize) -> Option<NodeInfo> {
-        let root = self.root.as_ref()?.clone();
-        let (shrunk_root, trailing_part) = self.shrink_piece(root, index)?;
-        self.root = Some(shrunk_root);
-        Some(trailing_part)
-    }
-
-    /// Walks down to the piece that strictly contains `index`, if there is one, and
-    /// returns the rebuilt path together with the trailing part of the split piece.
-    fn shrink_piece(&self, curr_node: Rc<Node>, index: usize) -> Option<(Rc<Node>, NodeInfo)> {
-        if index >= curr_node.subtree_len {
-            return None;
-        }
-        if index < curr_node.left_subtree_len {
-            let (new_left, trailing_part) =
-                self.shrink_piece(curr_node.left.as_ref().unwrap().clone(), index)?;
-            let rebuilt = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                Some(new_left),
-                curr_node.right.clone(),
-            ));
-            Some((rebuilt, trailing_part))
-        } else if index > curr_node.left_subtree_len + curr_node.length {
-            let inner_index = index - curr_node.left_subtree_len - curr_node.length;
-            let (new_right, trailing_part) =
-                self.shrink_piece(curr_node.right.as_ref().unwrap().clone(), inner_index)?;
-            let rebuilt = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                curr_node.left.clone(),
-                Some(new_right),
-            ));
-            Some((rebuilt, trailing_part))
-        } else if index == curr_node.left_subtree_len
-            || index == curr_node.left_subtree_len + curr_node.length
-        {
-            // already a piece boundary
-            None
-        } else {
-            let offset_in_node = index - curr_node.left_subtree_len;
-            let leading_part = Rc::new(Node::new(
-                curr_node.start,
-                offset_in_node,
-                curr_node.buffer_type,
-                curr_node.color,
-                curr_node.left.clone(),
-                curr_node.right.clone(),
-            ));
-            let trailing_part = NodeInfo {
-                start: curr_node.start + offset_in_node,
-                length: curr_node.length - offset_in_node,
-                color: Color::Red,
-                buffer_type: curr_node.buffer_type,
-            };
-            Some((leading_part, trailing_part))
-        }
-    }
-
-    fn insert_node(&self, curr_node: Rc<Node>, node_to_insert: NodeInfo, index: usize) -> Rc<Node> {
-        if index < curr_node.left_subtree_len {
-            let new_left = self.insert_node(
-                curr_node.left.as_ref().unwrap().clone(),
-                node_to_insert,
-                index,
-            );
-            let new_current_node = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                Some(new_left),
-                curr_node.right.clone(),
-            ));
-            Self::rebalance(new_current_node)
-        } else if index >= curr_node.left_subtree_len + curr_node.length {
-            let new_index = index - curr_node.left_subtree_len - curr_node.length;
-            let new_right = self.insert_node(
-                curr_node.right.as_ref().unwrap().clone(),
-                node_to_insert,
-                new_index,
-            );
-            let new_current_node = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                curr_node.left.clone(),
-                Some(new_right),
-            ));
-            Self::rebalance(new_current_node)
-        } else {
-            let _offset_in_node = index - curr_node.left_subtree_len;
-            // `insert` splits any piece that the insertion point falls inside before
-            // calling here, so `index` is always on a piece boundary and the only
-            // remaining mid-piece case is "insert immediately in front of this node".
-            debug_assert_eq!(
-                _offset_in_node, 0,
-                "insert_node reached an index inside a piece (offset {})",
-                _offset_in_node
-            );
-            {
-                let node_to_insert = Rc::new(Node::new(
-                    node_to_insert.start,
-                    node_to_insert.length,
-                    node_to_insert.buffer_type,
-                    node_to_insert.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                let left = curr_node.left.as_ref().unwrap().clone();
-                if left == self.black_leaf {
-                    let new_current_node = Rc::new(Node::new(
-                        curr_node.start,
-                        curr_node.length,
-                        curr_node.buffer_type,
-                        curr_node.color,
-                        Some(node_to_insert),
-                        curr_node.right.clone(),
-                    ));
-                    Self::rebalance(new_current_node)
-                } else {
-                    let new_left = self.insert_as_predecessor(left, node_to_insert);
-                    let new_current_node = Rc::new(Node::new(
-                        curr_node.start,
-                        curr_node.length,
-                        curr_node.buffer_type,
-                        curr_node.color,
-                        Some(new_left),
-                        curr_node.right.clone(),
-                    ));
-                    Self::rebalance(new_current_node)
-                }
-            }
-        }
-    }
+    } 
     pub fn delete(&mut self, index: usize, length: usize) {
         if let Some(root_node) = self.root.take() {
             if index >= root_node.subtree_len {
@@ -656,6 +404,221 @@ impl PieceTree {
             buffer_type: dest.buffer_type,
         }
     }
+    fn node_at(&self,root:Rc<Node>, offset: usize) -> NodePosition {
+        let mut offset = offset;
+        let mut start_offset = 0;
+        let mut current_node = root;
+        let mut path: Vec<Rc<Node>> = Vec::new();
+        while current_node != self.black_leaf {
+            path.push(current_node.clone());
+            if offset < current_node.left_subtree_len {
+                current_node = current_node.left.as_ref().unwrap().clone();
+            } else if offset >= current_node.left_subtree_len + current_node.length {
+                offset -= current_node.left_subtree_len + current_node.length;
+                start_offset += current_node.left_subtree_len + current_node.length;
+                current_node = current_node.right.as_ref().unwrap().clone();
+            } else {
+                let offset_in_node = offset - current_node.left_subtree_len;
+                return NodePosition {
+                    start_offset: start_offset + current_node.left_subtree_len,
+                    remainder: offset_in_node,
+                    path,
+                };
+            }
+        }
+        NodePosition {
+            start_offset,
+            remainder: 0,
+            path,
+        }
+    }
+    fn insert_at_beginning(&self, current_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
+        if current_node == self.black_leaf {
+            return node_to_insert;
+        }
+        let left_path =
+            self.insert_at_beginning(current_node.left.as_ref().unwrap().clone(), node_to_insert);
+        let new_current_node = Rc::new(Node::new(
+            current_node.start,
+            current_node.length,
+            current_node.buffer_type,
+            current_node.color,
+            Some(left_path),
+            current_node.right.clone(),
+        ));
+        Self::rebalance(new_current_node)
+    }
+    fn insert_at_end(&self, current_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
+        if current_node == self.black_leaf {
+            return node_to_insert;
+        }
+        let right_path =
+            self.insert_at_end(current_node.right.as_ref().unwrap().clone(), node_to_insert);
+        let new_current_node = Rc::new(Node::new(
+            current_node.start,
+            current_node.length,
+            current_node.buffer_type,
+            current_node.color,
+            current_node.left.clone(),
+            Some(right_path),
+        ));
+        Self::rebalance(new_current_node)
+    }
+    fn insert_at(
+        &self,
+        current_node: Rc<Node>,
+        offset: usize,
+        node_to_insert: Rc<Node>,
+    ) -> Rc<Node> {
+        if current_node == self.black_leaf {
+            return node_to_insert;
+        }
+        if offset <= current_node.left_subtree_len {
+            let left_path = self.insert_at(
+                current_node.left.as_ref().unwrap().clone(),
+                offset,
+                node_to_insert,
+            );
+            let new_current_node = Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                Some(left_path),
+                current_node.right.clone(),
+            ));
+            Self::rebalance(new_current_node)
+        } else {
+            let right_offset = offset.checked_sub(current_node.left_subtree_len + current_node.length).expect("in our current insert inserts only happen at boundaries ,so it this is occurring there is an issue");
+            let right_path = self.insert_at(
+                current_node.right.as_ref().unwrap().clone(),
+                right_offset,
+                node_to_insert,
+            );
+            let new_current_node = Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                current_node.left.clone(),
+                Some(right_path),
+            ));
+            Self::rebalance(new_current_node)
+        }
+    }
+    fn replace_at(current_node: Rc<Node>, offset: usize, node_that_replaces: NodeInfo) -> Rc<Node> {
+        if offset < current_node.left_subtree_len {
+            let left_path = Self::replace_at(
+                current_node.left.as_ref().unwrap().clone(),
+                offset,
+                node_that_replaces,
+            );
+
+            Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                Some(left_path),
+                current_node.right.clone(),
+            ))
+        } else if offset >= current_node.left_subtree_len + current_node.length {
+            let right_offset = offset - (current_node.left_subtree_len + current_node.length);
+            let right_path = Self::replace_at(
+                current_node.right.as_ref().unwrap().clone(),
+                right_offset,
+                node_that_replaces,
+            );
+
+            Rc::new(Node::new(
+                current_node.start,
+                current_node.length,
+                current_node.buffer_type,
+                current_node.color,
+                current_node.left.clone(),
+                Some(right_path),
+            ))
+        } else {
+            Rc::new(Node::new(
+                node_that_replaces.start,
+                node_that_replaces.length,
+                node_that_replaces.buffer_type,
+                node_that_replaces.color,
+                current_node.left.clone(),
+                current_node.right.clone(),
+            ))
+        }
+    }
+    fn pre_insert(&mut self, content: &str) -> Rc<Node> {
+        let previous_len = self.add.len();
+        self.add.push_str(content);
+        Rc::new(Node::new(
+            previous_len,
+            content.len(),
+            BufferType::Add,
+            Color::Red,
+            Some(self.black_leaf.clone()),
+            Some(self.black_leaf.clone()),
+        ))
+    }
+    pub fn insert(&mut self,  content: &str,offset: usize) {
+        if content.is_empty() {
+            return;
+        }
+        if let Some(root_node) = self.root.take() {
+            self.undo_stack.push(root_node.clone());
+            let node_to_insert = self.pre_insert(content);
+
+            if offset == 0 {
+                let new_root = self.insert_at_beginning(root_node.clone(), node_to_insert);
+                self.root = Some(Self::blacken(new_root));
+                return;
+            }
+            if offset == root_node.subtree_len {
+                let new_root = self.insert_at_end(root_node.clone(), node_to_insert);
+                self.root = Some(Self::blacken(new_root));
+                return;
+            }
+            let node_position = self.node_at(root_node.clone(),offset);
+            let piece = &node_position.path[node_position.path.len() - 1];
+            if node_position.start_offset + piece.length > offset {
+                let first_part = NodeInfo {
+                    start: piece.start,
+                    length: node_position.remainder,
+                    buffer_type: piece.buffer_type,
+                    color: piece.color,
+                };
+                let new_root = Self::replace_at(root_node, node_position.start_offset, first_part);
+                let second_part = Rc::new(Node::new(
+                    piece.start + node_position.remainder,
+                    piece.length - node_position.remainder,
+                    piece.buffer_type,
+                    Color::Red,
+                    Some(self.black_leaf.clone()),
+                    Some(self.black_leaf.clone()),
+                ));
+                let new_root = self.insert_at(new_root, offset, node_to_insert);
+                let new_root = self.insert_at(new_root, offset + content.len(), second_part);
+                self.root = Some(Self::blacken(new_root));
+            } else {
+                let new_root = self.insert_at(root_node.clone(), offset, node_to_insert);
+                self.root = Some(Self::blacken(new_root));
+            }
+        } else {
+            let node_to_insert = self.pre_insert(content);
+            self.root = Some(Self::blacken(node_to_insert));
+        }
+    }
+    fn blacken(node: Rc<Node>) -> Rc<Node> {
+        Rc::new(Node::new(
+            node.start,
+            node.length,
+            node.buffer_type,
+            Color::Black,
+            node.left.clone(),
+            node.right.clone(),
+        ))
+    }
 
     fn bubble(&self, y: Rc<Node>) -> Rc<Node> {
         if y.left_color() == Color::DoubleBlack || y.right_color() == Color::DoubleBlack {
@@ -815,7 +778,10 @@ impl PieceTree {
         }
         if z.color == Color::DoubleBlack
             && z.left_color() == Color::NegativeBlack
-            && z.left.as_ref().unwrap().has_legimate_black_internal_children()
+            && z.left
+                .as_ref()
+                .unwrap()
+                .has_legimate_black_internal_children()
         {
             let x = z.left.as_ref().unwrap().clone();
             let w = x.left.as_ref().unwrap().clone();
@@ -856,7 +822,10 @@ impl PieceTree {
             return new_y;
         } else if z.color == Color::DoubleBlack
             && z.right_color() == Color::NegativeBlack
-            && z.right.as_ref().unwrap().has_legimate_black_internal_children()
+            && z.right
+                .as_ref()
+                .unwrap()
+                .has_legimate_black_internal_children()
         {
             let x = z;
             let z = x.right.as_ref().unwrap().clone();
@@ -1072,11 +1041,11 @@ impl Node {
     }
     fn has_legimate_black_internal_children(&self) -> bool {
         let left = match self.left.as_ref() {
-            Some(l) => {l.length>0 && l.color == Color::Black},
+            Some(l) => l.length > 0 && l.color == Color::Black,
             None => false,
         };
         let right = match self.right.as_ref() {
-            Some(r) => {r.length>0 && r.color == Color::Black},
+            Some(r) => r.length > 0 && r.color == Color::Black,
             None => false,
         };
         left && right
@@ -1125,6 +1094,11 @@ impl Color {
             }
         }
     }
+}
+struct NodePosition {
+    start_offset: usize,
+    remainder: usize,
+    path: Vec<Rc<Node>>,
 }
 
 // ============================================================================
@@ -1242,7 +1216,10 @@ impl PieceTree {
             report.violate(format!("double-black node left in the tree at rest {}", at));
         }
         if node.color == Color::NegativeBlack {
-            report.violate(format!("negative-black node left in the tree at rest {}", at));
+            report.violate(format!(
+                "negative-black node left in the tree at rest {}",
+                at
+            ));
         }
         if is_root && node.color != Color::Black {
             report.violate(format!("root is not black (color={:?})", node.color));
