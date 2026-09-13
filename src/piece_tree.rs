@@ -63,232 +63,7 @@ impl PieceTree {
         content.push_str(content_str);
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
     }
-    pub fn delete(&mut self, index: usize, length: usize) {
-        if let Some(root_node) = self.root.take() {
-            if index >= root_node.subtree_len {
-                self.root = Some(root_node);
-                return;
-            }
-            self.undo_stack.push(root_node.clone());
-            if index == 0 && length >= root_node.subtree_len {
-                self.root = None;
-                return;
-            }
-        }
-    }
-    fn insert_at_rightmost_with_target_black_height(
-        current_node: Rc<Node>,
-        pivot: Rc<Node>,
-        t2: Rc<Node>,
-        target_black_height: i32,
-    ) -> Rc<Node> {
-        if current_node.black_height <= target_black_height {
-            Rc::new(Node::new(
-                pivot.start,
-                pivot.length,
-                pivot.buffer_type,
-                Color::Red,
-                Some(current_node),
-                Some(t2),
-            ))
-        } else {
-            let new_right = Self::insert_at_rightmost_with_target_black_height(
-                current_node.right.as_ref().unwrap().clone(),
-                pivot,
-                t2,
-                target_black_height,
-            );
-            Self::rebalance(Rc::new(Node::new(
-                current_node.start,
-                current_node.length,
-                current_node.buffer_type,
-                current_node.color,
-                current_node.left.clone(),
-                Some(new_right),
-            )))
-        }
-    }
-    fn insert_at_leftmost_with_target_black_height(
-        current_node: Rc<Node>,
-        pivot: Rc<Node>,
-        t1: Rc<Node>,
-        target_black_height: i32,
-    ) -> Rc<Node> {
-        if current_node.black_height <= target_black_height {
-            Rc::new(Node::new(
-                pivot.start,
-                pivot.length,
-                pivot.buffer_type,
-                Color::Red,
-                Some(t1),
-                Some(current_node),
-            ))
-        } else {
-            let new_left = Self::insert_at_leftmost_with_target_black_height(
-                current_node.left.as_ref().unwrap().clone(),
-                pivot,
-                t1,
-                target_black_height,
-            );
-            Self::rebalance(Rc::new(Node::new(
-                current_node.start,
-                current_node.length,
-                current_node.buffer_type,
-                current_node.color,
-                Some(new_left),
-                current_node.right.clone(),
-            )))
-        }
-    }
-    fn join(t1: Rc<Node>, pivot: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
-        let joined = if t1.black_height == t2.black_height {
-            // The pivot is black here, so a `rebalance` can still repair a red-red
-            // violation that arrived at the root of either input. Both inputs may carry
-            // one pending violation at their root (that is the contract the recursive
-            // join relies on); embedding them under the new pivot without repairing
-            // would push that violation one level deeper, where no later repair looks.
-            Self::rebalance(Rc::new(Node::new(
-                pivot.start,
-                pivot.length,
-                pivot.buffer_type,
-                Color::Black,
-                Some(t1),
-                Some(t2),
-            )))
-        } else if t1.black_height > t2.black_height {
-            let target_black_height = t2.black_height;
-            Self::insert_at_rightmost_with_target_black_height(t1, pivot, t2, target_black_height)
-        } else {
-            let target_black_height = t1.black_height;
-            Self::insert_at_leftmost_with_target_black_height(t2, pivot, t1, target_black_height)
-        };
-
-        // The two recursive insertions above build a red node at the bottom of the
-        // spine they walk and repair red-red violations on the way back up, but
-        // `rebalance` is a no-op on a red node, so a violation can be left sitting
-        // at the *root* of the joined tree (a red node with a red child). Nothing
-        // above a join is guaranteed to look at that shape again -- `split` hands
-        // the joined tree straight back to its caller, and `delete` rebuilds the
-        // document from the pieces it gets -- so repair it here. Blackening the root
-        // always repairs it: a black node may have red children, and the children
-        // keep their equal black heights. The only cost is one extra black on every
-        // path, which callers cannot observe: black heights are only ever compared
-        // with each other, and the tree stays valid.
-        if joined.color == Color::Red
-            && (joined.left_color() == Color::Red || joined.right_color() == Color::Red)
-        {
-            Rc::new(Node::new(
-                joined.start,
-                joined.length,
-                joined.buffer_type,
-                Color::Black,
-                joined.left.clone(),
-                joined.right.clone(),
-            ))
-        } else {
-            joined
-        }
-    }
-    fn split(&self, current_node: Rc<Node>, index: usize) -> (Rc<Node>, Rc<Node>) {
-        if index < current_node.left_subtree_len {
-            let (t1, t2) = self.split(current_node.left.as_ref().unwrap().clone(), index);
-            let pivot = Rc::new(Node::new(
-                current_node.start,
-                current_node.length,
-                current_node.buffer_type,
-                current_node.color,
-                Some(self.black_leaf.clone()),
-                Some(self.black_leaf.clone()),
-            ));
-            (
-                t1,
-                Self::join(t2, pivot, current_node.right.as_ref().unwrap().clone()),
-            )
-        } else if index >= current_node.left_subtree_len + current_node.length {
-            let index = index - current_node.left_subtree_len - current_node.length;
-            let (t1, t2) = self.split(current_node.right.as_ref().unwrap().clone(), index);
-            let pivot = Rc::new(Node::new(
-                current_node.start,
-                current_node.length,
-                current_node.buffer_type,
-                current_node.color,
-                Some(self.black_leaf.clone()),
-                Some(self.black_leaf.clone()),
-            ));
-            (
-                Self::join(current_node.left.as_ref().unwrap().clone(), pivot, t1),
-                t2,
-            )
-        } else {
-            let offset_in_node = index - current_node.left_subtree_len;
-            if offset_in_node == 0 {
-                let t1 = Rc::new(Node::new(
-                    current_node.start,
-                    current_node.length,
-                    current_node.buffer_type,
-                    current_node.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                let t2 = self.merge(t1, current_node.right.as_ref().unwrap().clone());
-                (current_node.left.as_ref().unwrap().clone(), t2)
-            } else {
-                let first_part = Rc::new(Node::new(
-                    current_node.start,
-                    offset_in_node,
-                    current_node.buffer_type,
-                    current_node.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                let second_part = Rc::new(Node::new(
-                    current_node.start + offset_in_node,
-                    current_node.length - offset_in_node,
-                    current_node.buffer_type,
-                    current_node.color,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                let t1 = self.merge(current_node.left.as_ref().unwrap().clone(), first_part);
-                let t2 = self.merge(second_part, current_node.right.as_ref().unwrap().clone());
-                (t1, t2)
-            }
-        }
-    }
-    fn merge(&self, t1: Rc<Node>, t2: Rc<Node>) -> Rc<Node> {
-        if t1 == self.black_leaf {
-            return t2;
-        }
-        if t2 == self.black_leaf {
-            return t1;
-        }
-        let pivot = self.find_right_most(t1.clone());
-        let t1 = self.remove_right_most(t1);
-        let t1 = if t1 == self.double_black_leaf {
-            self.black_leaf.clone()
-        } else if t1.color == Color::DoubleBlack {
-            // If the root of t1 became double-black from bubblin,absorbing it here
-            Rc::new(Node::new(
-                t1.start,
-                t1.length,
-                t1.buffer_type,
-                Color::Black, // Absorb double-black at the root of t1
-                t1.left.clone(),
-                t1.right.clone(),
-            ))
-        } else {
-            t1
-        };
-        let pivot = Rc::new(Node::new(
-            pivot.start,
-            pivot.length,
-            pivot.buffer_type,
-            Color::Red,
-            Some(self.black_leaf.clone()),
-            Some(self.black_leaf.clone()),
-        ));
-        Self::join(t1, pivot, t2)
-    }
+     
     fn insert_as_predecessor(&self, curr_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
         if curr_node.right.as_ref().unwrap().clone() == self.black_leaf {
             let new_node = Rc::new(Node::new(
@@ -465,16 +240,9 @@ impl PieceTree {
             Self::rebalance(new_current_node)
         }
     }
-    fn delete_at(
-        &self,
-        current_node: Rc<Node>,
-        offset: usize,
-    ) -> Rc<Node> {
+    fn delete_at(&self, current_node: Rc<Node>, offset: usize) -> Rc<Node> {
         if offset < current_node.left_subtree_len {
-            let left_path = self.delete_at(
-                current_node.left.as_ref().unwrap().clone(),
-                offset,
-            );
+            let left_path = self.delete_at(current_node.left.as_ref().unwrap().clone(), offset);
 
             self.bubble(Rc::new(Node::new(
                 current_node.start,
@@ -486,10 +254,8 @@ impl PieceTree {
             )))
         } else if offset >= current_node.left_subtree_len + current_node.length {
             let right_offset = offset - (current_node.left_subtree_len + current_node.length);
-            let right_path = self.delete_at(
-                current_node.right.as_ref().unwrap().clone(),
-                right_offset,
-            );
+            let right_path =
+                self.delete_at(current_node.right.as_ref().unwrap().clone(), right_offset);
 
             self.bubble(Rc::new(Node::new(
                 current_node.start,
@@ -501,7 +267,6 @@ impl PieceTree {
             )))
         } else {
             self.remove_node(current_node)
-            
         }
     }
     fn remove_node(&self, node: Rc<Node>) -> Rc<Node> {
@@ -555,6 +320,139 @@ impl PieceTree {
                 }
             }
         }
+    }
+    pub fn delete(&mut self, offset: usize, length: usize) {
+        if length == 0 {
+            return;
+        }
+        if let Some(root_node) = self.root.take() {
+            if offset >= root_node.subtree_len {
+                self.root = Some(root_node);
+                return;
+            }
+            self.undo_stack.push(root_node.clone());
+            if offset == 0 && length >= root_node.subtree_len {
+                self.root = None;
+                return;
+            }
+            let mut start_node_pos = self.node_at(root_node.clone(), offset);
+            let end_node_pos = self.node_at(root_node.clone(), offset + length);
+            let start_piece = Self::last(&start_node_pos.path);
+            let end_piece = Self::last(&end_node_pos.path);
+            if start_piece == end_piece {
+                if start_node_pos.remainder == 0 && end_node_pos.remainder == start_piece.length - 1
+                {
+                    let new_root = self.delete_at(root_node, offset);
+                    self.root = Some(Self::blacken(new_root));
+                } else if start_node_pos.remainder == 0
+                    && end_node_pos.remainder < start_piece.length - 1
+                {
+                    let suffix = NodeInfo {
+                        start: start_piece.start + end_node_pos.remainder,
+                        length: start_piece.length - end_node_pos.remainder,
+                        buffer_type: start_piece.buffer_type,
+                        color: start_piece.color,
+                    };
+                    let new_root = Self::replace_at(root_node, start_node_pos.start_offset, suffix);
+                    self.root = Some(new_root);
+                } else if start_node_pos.remainder > 0
+                    && end_node_pos.remainder == start_piece.length - 1
+                {
+                    let prefix = NodeInfo {
+                        start: start_piece.start,
+                        length: start_node_pos.remainder,
+                        buffer_type: start_piece.buffer_type,
+                        color: start_piece.color,
+                    };
+                    let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
+                    self.root = Some(new_root);
+                } else {
+                    let prefix = NodeInfo {
+                        start: start_piece.start,
+                        length: start_node_pos.remainder,
+                        buffer_type: start_piece.buffer_type,
+                        color: start_piece.color,
+                    };
+                    let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
+                    let suffix = Rc::new(Node::new(
+                        start_piece.start + end_node_pos.remainder,
+                        start_piece.length - end_node_pos.remainder,
+                        start_piece.buffer_type,
+                        Color::Red,
+                        Some(self.black_leaf.clone()),
+                        Some(self.black_leaf.clone()),
+                    ));
+                    let new_root = self.insert_at(
+                        new_root,
+                        start_node_pos.start_offset + (start_node_pos.remainder),
+                        suffix,
+                    );
+                    self.root = Some(Self::blacken(new_root));
+                }
+            } else {
+                let left = NodeInfo {
+                    start: start_piece.start,
+                    length: start_node_pos.remainder,
+                    buffer_type: start_piece.buffer_type,
+                    color: start_piece.color,
+                };
+                let right = NodeInfo {
+                    start: end_piece.start + end_node_pos.remainder,
+                    length: end_piece.length - end_node_pos.remainder,
+                    buffer_type: end_piece.buffer_type,
+                    color: end_piece.color,
+                };
+                let mut between: Vec<usize> = Vec::new();
+                let path = &mut start_node_pos.path;
+                let mut at = start_node_pos.start_offset + start_piece.length;
+                while self.next(path) && Self::last(path) != end_piece {
+                    between.push(at);
+                    at += Self::last(path).length;
+                }
+                let mut new_root = if right.length == 0 {
+                    Self::blacken(self.delete_at(root_node, end_node_pos.start_offset))
+                } else {
+                    Self::replace_at(root_node, end_node_pos.start_offset, right)
+                };
+
+                let mut i = between.len() as i32 - 1;
+                while i >= 0 {
+                    new_root = Self::blacken(self.delete_at(new_root, between[i as usize]));
+                    i -= 1;
+                }
+                new_root = if left.length == 0 {
+                    Self::blacken(self.delete_at(new_root, start_node_pos.start_offset))
+                } else {
+                    Self::replace_at(new_root, start_node_pos.start_offset, left)
+                };
+                self.root = Some(Self::blacken(new_root));
+            }
+        }
+    }
+    fn last(path: &[Rc<Node>]) -> Rc<Node> {
+        path[path.len() - 1].clone()
+    }
+    fn next(&self, path: &mut Vec<Rc<Node>>) -> bool {
+        let mut node = Self::last(path);
+        let right = node.right.clone().unwrap();
+        if right != self.black_leaf {
+            let mut n = right;
+            while n != self.black_leaf {
+                path.push(n.clone());
+                n = n.left.clone().unwrap();
+            }
+            return true;
+        }
+        while path.len() > 1 {
+            path.pop();
+            let parent = Self::last(path);
+            if parent.left.clone().unwrap() == node {
+                return true;
+            }
+            node = parent;
+        }
+
+        false
     }
     fn replace_at(current_node: Rc<Node>, offset: usize, node_that_replaces: NodeInfo) -> Rc<Node> {
         if offset < current_node.left_subtree_len {
@@ -630,8 +528,10 @@ impl PieceTree {
                 return;
             }
             let node_position = self.node_at(root_node.clone(), offset);
-            let piece = &node_position.path[node_position.path.len() - 1];
-            if node_position.start_offset + piece.length > offset {
+            let piece = Self::last(&node_position.path);
+            if node_position.start_offset + piece.length > offset
+                && offset != node_position.start_offset
+            {
                 let first_part = NodeInfo {
                     start: piece.start,
                     length: node_position.remainder,
