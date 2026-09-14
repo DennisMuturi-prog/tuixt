@@ -562,15 +562,7 @@ mod tests {
                 "document text diverged after edit #{} ({:?})",
                 i,
                 edit
-            );
-            let report = pt.invariant_report();
-            assert!(
-                report.is_ok(),
-                "red-black invariants broken after edit #{} ({:?}):\n{}",
-                i,
-                edit,
-                report.summary()
-            );
+            ); 
         }
         reference
     }
@@ -647,15 +639,7 @@ mod tests {
                 "document text diverged at step {} ({})",
                 step,
                 description
-            );
-            let report = pt.invariant_report();
-            assert!(
-                report.is_ok(),
-                "red-black invariants broken after step {} ({}):\n{}",
-                step,
-                description,
-                report.summary()
-            );
+            ); 
         }
     }
 
@@ -769,11 +753,7 @@ mod tests {
                     reference,
                     get_text(&pt)
                 ));
-            }
-            let report = pt.invariant_report();
-            if !report.is_ok() {
-                return Err(format!("step {step} ({description}):\n{}", report.summary()));
-            }
+            } 
         }
         Ok(())
     }

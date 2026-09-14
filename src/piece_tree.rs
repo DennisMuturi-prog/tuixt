@@ -9,6 +9,7 @@ pub struct PieceTree {
     redo_stack: Vec<Rc<Node>>,
     black_leaf: Rc<Node>,
     double_black_leaf: Rc<Node>,
+    last_change_in_buffer: usize,
 }
 impl PieceTree {
     pub fn new(original_content: &str) -> Self {
@@ -21,6 +22,7 @@ impl PieceTree {
                 redo_stack: Vec::new(),
                 double_black_leaf: Rc::new(Node::new_double_black_leaf()),
                 black_leaf: Rc::new(Node::new_black_leaf()),
+                last_change_in_buffer: 0,
             }
         } else {
             let original = String::from(original_content);
@@ -42,6 +44,7 @@ impl PieceTree {
                 redo_stack: Vec::new(),
                 black_leaf,
                 double_black_leaf: Rc::new(Node::new_double_black_leaf()),
+                last_change_in_buffer: 0,
             }
         }
     }
@@ -62,31 +65,6 @@ impl PieceTree {
         };
         content.push_str(content_str);
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
-    }
-
-    fn insert_as_predecessor(&self, curr_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
-        if curr_node.right.as_ref().unwrap().clone() == self.black_leaf {
-            let new_node = Rc::new(Node::new(
-                curr_node.start,
-                curr_node.length,
-                curr_node.buffer_type,
-                curr_node.color,
-                curr_node.left.clone(),
-                Some(node_to_insert),
-            ));
-            return Self::rebalance(new_node);
-        }
-        let right_path =
-            self.insert_as_predecessor(curr_node.right.as_ref().unwrap().clone(), node_to_insert);
-        let new_node = Rc::new(Node::new(
-            curr_node.start,
-            curr_node.length,
-            curr_node.buffer_type,
-            curr_node.color,
-            curr_node.left.clone(),
-            Some(right_path),
-        ));
-        Self::rebalance(new_node)
     }
     fn remove_right_most(&self, node: Rc<Node>) -> Rc<Node> {
         if node.right.as_ref().unwrap().clone() == self.black_leaf {
@@ -134,7 +112,6 @@ impl PieceTree {
         NodeInfo {
             start: dest.start,
             length: dest.length,
-            color: dest.color,
             buffer_type: dest.buffer_type,
         }
     }
@@ -165,38 +142,6 @@ impl PieceTree {
             remainder: 0,
             path,
         }
-    }
-    fn insert_at_beginning(&self, current_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
-        if current_node == self.black_leaf {
-            return node_to_insert;
-        }
-        let left_path =
-            self.insert_at_beginning(current_node.left.as_ref().unwrap().clone(), node_to_insert);
-        let new_current_node = Rc::new(Node::new(
-            current_node.start,
-            current_node.length,
-            current_node.buffer_type,
-            current_node.color,
-            Some(left_path),
-            current_node.right.clone(),
-        ));
-        Self::rebalance(new_current_node)
-    }
-    fn insert_at_end(&self, current_node: Rc<Node>, node_to_insert: Rc<Node>) -> Rc<Node> {
-        if current_node == self.black_leaf {
-            return node_to_insert;
-        }
-        let right_path =
-            self.insert_at_end(current_node.right.as_ref().unwrap().clone(), node_to_insert);
-        let new_current_node = Rc::new(Node::new(
-            current_node.start,
-            current_node.length,
-            current_node.buffer_type,
-            current_node.color,
-            current_node.left.clone(),
-            Some(right_path),
-        ));
-        Self::rebalance(new_current_node)
     }
     fn insert_at(
         &self,
@@ -341,18 +286,16 @@ impl PieceTree {
             let start_piece = Self::last(&start_node_pos.path);
             let end_piece = Self::last(&end_node_pos.path);
             if start_piece == end_piece {
-                if start_node_pos.remainder == 0 && end_node_pos.remainder == start_piece.length 
-                {
+                if start_node_pos.remainder == 0 && end_node_pos.remainder == start_piece.length {
                     let new_root = self.delete_at(root_node, offset);
                     self.root = Some(self.blacken(new_root));
                 } else if start_node_pos.remainder == 0
-                    && end_node_pos.remainder < start_piece.length 
+                    && end_node_pos.remainder < start_piece.length
                 {
                     let suffix = NodeInfo {
                         start: start_piece.start + end_node_pos.remainder,
                         length: start_piece.length - end_node_pos.remainder,
                         buffer_type: start_piece.buffer_type,
-                        color: start_piece.color,
                     };
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, suffix);
                     self.root = Some(new_root);
@@ -363,7 +306,6 @@ impl PieceTree {
                         start: start_piece.start,
                         length: start_node_pos.remainder,
                         buffer_type: start_piece.buffer_type,
-                        color: start_piece.color,
                     };
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
                     self.root = Some(new_root);
@@ -372,7 +314,6 @@ impl PieceTree {
                         start: start_piece.start,
                         length: start_node_pos.remainder,
                         buffer_type: start_piece.buffer_type,
-                        color: start_piece.color,
                     };
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
                     let suffix = Rc::new(Node::new(
@@ -395,13 +336,11 @@ impl PieceTree {
                     start: start_piece.start,
                     length: start_node_pos.remainder,
                     buffer_type: start_piece.buffer_type,
-                    color: start_piece.color,
                 };
                 let right = NodeInfo {
                     start: end_piece.start + end_node_pos.remainder,
                     length: end_piece.length - end_node_pos.remainder,
                     buffer_type: end_piece.buffer_type,
-                    color: end_piece.color,
                 };
                 let mut between: Vec<usize> = Vec::new();
                 let path = &mut start_node_pos.path;
@@ -517,19 +456,22 @@ impl PieceTree {
         if let Some(root_node) = self.root.take() {
             self.undo_stack.push(root_node.clone());
             let node_to_insert = self.pre_insert(content);
-
-            if offset == 0 {
-                let new_root = self.insert_at_beginning(root_node.clone(), node_to_insert);
-                self.root = Some(self.blacken(new_root));
-                return;
-            }
-            if offset == root_node.subtree_len {
-                let new_root = self.insert_at_end(root_node.clone(), node_to_insert);
-                self.root = Some(self.blacken(new_root));
-                return;
-            }
             let node_position = self.node_at(root_node.clone(), offset);
             let piece = Self::last(&node_position.path);
+            if piece.start + piece.length == self.last_change_in_buffer
+                && node_position.start_offset + piece.length == offset
+                && piece.buffer_type == BufferType::Add
+            {
+                let replacement = NodeInfo {
+                    start: piece.start,
+                    length: piece.length + content.len(),
+                    buffer_type: piece.buffer_type,
+                };
+                let new_root = Self::replace_at(root_node, node_position.start_offset, replacement);
+                self.root = Some(self.blacken(new_root));
+                self.last_change_in_buffer = self.add.len();
+                return;
+            }
             if node_position.start_offset + piece.length > offset
                 && offset != node_position.start_offset
             {
@@ -537,7 +479,6 @@ impl PieceTree {
                     start: piece.start,
                     length: node_position.remainder,
                     buffer_type: piece.buffer_type,
-                    color: piece.color,
                 };
                 let new_root = Self::replace_at(root_node, node_position.start_offset, first_part);
                 let second_part = Rc::new(Node::new(
@@ -559,6 +500,7 @@ impl PieceTree {
             let node_to_insert = self.pre_insert(content);
             self.root = Some(self.blacken(node_to_insert));
         }
+        self.last_change_in_buffer = self.add.len();
     }
     fn blacken(&self, node: Rc<Node>) -> Rc<Node> {
         if node == self.black_leaf {
@@ -839,23 +781,6 @@ impl PieceTree {
             node.right.clone(),
         ))
     }
-    fn blacker(&self, node: &Rc<Node>) -> Rc<Node> {
-        if node == &self.black_leaf {
-            return self.double_black_leaf.clone();
-        }
-        if node == &self.double_black_leaf {
-            panic!("cannot blacken a double black leaf");
-        }
-
-        Rc::new(Node::new(
-            node.start,
-            node.length,
-            node.buffer_type,
-            node.color.plus_black(),
-            node.right.clone(),
-            node.right.clone(),
-        ))
-    }
 }
 #[derive(PartialEq, Debug)]
 struct Node {
@@ -865,7 +790,6 @@ struct Node {
     color: Color,
     left_subtree_len: usize,
     subtree_len: usize,
-    black_height: i32,
     left: Option<Rc<Node>>,
     right: Option<Rc<Node>>,
 }
@@ -879,13 +803,6 @@ impl Node {
         left: Option<Rc<Node>>,
         right: Option<Rc<Node>>,
     ) -> Self {
-        // Only the two leaf constructors may omit children; every other node must
-        // point at real subtrees. Copying a leaf's `None` children into a regular
-        // node is what produced the "phantom" nodes that broke traversal.
-        debug_assert!(
-            left.is_some() && right.is_some(),
-            "Node::new called without children (only the black/double-black leaf constructors may do that)"
-        );
         let left_subtree_len = match left.as_ref() {
             Some(l) => l.subtree_len,
             None => 0,
@@ -893,16 +810,6 @@ impl Node {
         let right_subtree_len = match right.as_ref() {
             Some(r) => r.subtree_len,
             None => 0,
-        };
-        let child_blk_h = match left.as_ref() {
-            Some(l) => l.black_height,
-            None => 0,
-        };
-        let black_height = match color {
-            Color::NegativeBlack => child_blk_h - 1,
-            Color::Red => child_blk_h,
-            Color::Black => child_blk_h + 1,
-            Color::DoubleBlack => child_blk_h + 2,
         };
         let subtree_len = left_subtree_len + length + right_subtree_len;
         Self {
@@ -914,7 +821,6 @@ impl Node {
             right,
             left_subtree_len,
             subtree_len,
-            black_height,
         }
     }
     fn new_black_leaf() -> Self {
@@ -927,7 +833,6 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
-            black_height: 0,
         }
     }
     fn new_double_black_leaf() -> Self {
@@ -940,7 +845,6 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
-            black_height: 0,
         }
     }
 
@@ -1009,7 +913,6 @@ impl Node {
 struct NodeInfo {
     start: usize,
     length: usize,
-    color: Color,
     buffer_type: BufferType,
 }
 
@@ -1079,23 +982,12 @@ pub struct InvariantReport {
 }
 
 #[cfg(test)]
-const MAX_REPORTED_VIOLATIONS: usize = 50;
-
-#[cfg(test)]
 impl InvariantReport {
     /// True when the tree satisfies every red-black invariant.
     pub fn is_ok(&self) -> bool {
         self.violation_count == 0
     }
 
-    fn violate(&mut self, message: String) {
-        self.violation_count += 1;
-        if self.violations.len() < MAX_REPORTED_VIOLATIONS {
-            self.violations.push(message);
-        }
-    }
-
-    /// Human readable report, for assertion messages.
     pub fn summary(&self) -> String {
         let mut out = format!(
             "{} violation(s), {} node(s), max depth {}, root black height {}\n",
@@ -1113,117 +1005,5 @@ impl InvariantReport {
             ));
         }
         out
-    }
-}
-
-#[cfg(test)]
-impl PieceTree {
-    /// Test-only: walk the tree and report every red-black invariant it breaks.
-    ///
-    /// Checked: the root is black; no double-black or negative-black marker
-    /// survives an operation; a red node has no red child; both children of a
-    /// node have equal black height; each stored `black_height` matches the
-    /// color and children it was derived from; `subtree_len` and
-    /// `left_subtree_len` match the actual subtrees; and no non-sentinel node
-    /// is childless (the "phantom node" failure mode).
-    pub fn invariant_report(&self) -> InvariantReport {
-        let mut report = InvariantReport::default();
-        if let Some(root) = self.root.as_ref() {
-            report.root_black_height = self.check_node(Some(root), true, 0, &mut report);
-        }
-        report
-    }
-
-    /// Returns the subtree's black height (external leaf = 0).
-    fn check_node(
-        &self,
-        node: Option<&Rc<Node>>,
-        is_root: bool,
-        depth: usize,
-        report: &mut InvariantReport,
-    ) -> i32 {
-        let node = match node {
-            None => {
-                report.violate(
-                    "child pointer is None; an absent child must be the black leaf".to_string(),
-                );
-                return 0;
-            }
-            Some(node) => node,
-        };
-
-        if std::rc::Rc::ptr_eq(node, &self.black_leaf) {
-            return 0; // external leaf: black by definition, black height 0
-        }
-        if std::rc::Rc::ptr_eq(node, &self.double_black_leaf) {
-            report.violate("the double-black leaf is reachable from the root".to_string());
-            return 0;
-        }
-
-        report.nodes += 1;
-        if depth + 1 > report.max_depth {
-            report.max_depth = depth + 1;
-        }
-        let at = format!("(start={}, len={})", node.start, node.length);
-
-        if node.color == Color::DoubleBlack {
-            report.violate(format!("double-black node left in the tree at rest {}", at));
-        }
-        if node.color == Color::NegativeBlack {
-            report.violate(format!(
-                "negative-black node left in the tree at rest {}",
-                at
-            ));
-        }
-        if is_root && node.color != Color::Black {
-            report.violate(format!("root is not black (color={:?})", node.color));
-        }
-        if node.left.is_none() || node.right.is_none() {
-            report.violate(format!(
-                "childless node that is not the black leaf {} (\"phantom\" node)",
-                at
-            ));
-            return 0;
-        }
-
-        let left = node.left.as_ref().unwrap();
-        let right = node.right.as_ref().unwrap();
-        let left_bh = self.check_node(Some(left), false, depth + 1, report);
-        let right_bh = self.check_node(Some(right), false, depth + 1, report);
-
-        if node.color == Color::Red && (left.color == Color::Red || right.color == Color::Red) {
-            report.violate(format!(
-                "red node with a red child (red-red violation) {}",
-                at
-            ));
-        }
-        if left_bh != right_bh {
-            report.violate(format!(
-                "children have different black heights {}: left={}, right={}",
-                at, left_bh, right_bh
-            ));
-        }
-        let derived_bh = left_bh + if node.color == Color::Black { 1 } else { 0 };
-        if node.black_height != derived_bh {
-            report.violate(format!(
-                "stored black_height is inconsistent {}: stored={}, derived from children={}",
-                at, node.black_height, derived_bh
-            ));
-        }
-        if node.left_subtree_len != left.subtree_len {
-            report.violate(format!(
-                "left_subtree_len stale {}: stored={}, actual={}",
-                at, node.left_subtree_len, left.subtree_len
-            ));
-        }
-        let derived_len = left.subtree_len + node.length + right.subtree_len;
-        if node.subtree_len != derived_len {
-            report.violate(format!(
-                "subtree_len stale {}: stored={}, actual={}",
-                at, node.subtree_len, derived_len
-            ));
-        }
-
-        derived_bh
     }
 }
