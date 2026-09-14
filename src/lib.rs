@@ -805,5 +805,219 @@ mod tests {
                 .join("\n")
         );
     }
+
+    // ============================ undo / redo ============================
+    //
+    // The stacks store whole tree roots (the tree is persistent, so an old root
+    // stays valid as `add` only grows), which means these tests can drive undo
+    // and redo purely through the public API and compare document text.
+
+    #[test]
+    fn test_undo_redo_basic_insert() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        assert_eq!("Xhello", get_text(&pt));
+
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("Xhello", get_text(&pt));
+    }
+
+    #[test]
+    fn test_undo_redo_with_empty_history_is_noop() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("hello", get_text(&pt));
+    }
+
+    /// The very first insert into an empty document has no root to snapshot,
+    /// so it must record the empty state explicitly for undo.
+    #[test]
+    fn test_undo_first_insert_into_empty_tree() {
+        let mut pt = piece_tree::PieceTree::new("");
+        pt.insert("a", 0);
+        assert_eq!("a", get_text(&pt));
+
+        pt.undo();
+        assert_eq!("", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("a", get_text(&pt));
+    }
+
+    /// Undo the delete that emptied the document, then redo it. The empty
+    /// state has to be recorded too, otherwise redo cannot reinstate the delete.
+    #[test]
+    fn test_undo_delete_all() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.delete(0, 5);
+        assert_eq!("", get_text(&pt));
+
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("", get_text(&pt));
+    }
+
+    #[test]
+    fn test_new_insert_after_undo_clears_redo() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.insert("Y", 5);
+        assert_eq!("helloY", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("helloY", get_text(&pt));
+    }
+
+    #[test]
+    fn test_delete_after_undo_clears_redo() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.delete(0, 1);
+        assert_eq!("ello", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("ello", get_text(&pt));
+    }
+
+    /// Deleting the whole buffer takes an early return, which used to skip the
+    /// `redo_stack.clear()`; a stale redo would then resurrect the old document.
+    #[test]
+    fn test_delete_all_after_undo_clears_redo() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.delete(0, 5);
+        assert_eq!("", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("", get_text(&pt));
+    }
+
+    /// A redo must put the state it left onto the undo stack; when that push
+    /// went to the wrong stack, a second undo did nothing.
+    #[test]
+    fn test_undo_after_redo_restores_previous_state() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        pt.undo();
+        pt.redo();
+        assert_eq!("Xhello", get_text(&pt));
+
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+
+        pt.redo();
+        assert_eq!("Xhello", get_text(&pt));
+    }
+
+    #[test]
+    fn test_multiple_undo_and_redo_walk_the_whole_history() {
+        let mut pt = piece_tree::PieceTree::new("mid");
+        pt.insert("A", 0);
+        assert_eq!("Amid", get_text(&pt));
+        pt.insert("B", 4);
+        assert_eq!("AmidB", get_text(&pt));
+        pt.delete(1, 2);
+        assert_eq!("AdB", get_text(&pt));
+
+        // Walk the history back to the initial document.
+        pt.undo();
+        assert_eq!("AmidB", get_text(&pt));
+        pt.undo();
+        assert_eq!("Amid", get_text(&pt));
+        pt.undo();
+        assert_eq!("mid", get_text(&pt));
+        pt.undo();
+        assert_eq!("mid", get_text(&pt));
+
+        // And forward again to the final edit.
+        pt.redo();
+        assert_eq!("Amid", get_text(&pt));
+        pt.redo();
+        assert_eq!("AmidB", get_text(&pt));
+        pt.redo();
+        assert_eq!("AdB", get_text(&pt));
+        pt.redo();
+        assert_eq!("AdB", get_text(&pt));
+    }
+
+    /// Randomised differential test: a three-stack reference model (past /
+    /// current / future) drives the same inserts, deletes, undos and redos as
+    /// the piece tree. Every operation must leave the document identical, and
+    /// the model's branch-invalidation rule (a forward edit clears the future)
+    /// has to match the tree's `redo_stack.clear()`.
+    #[test]
+    fn test_fuzz_undo_redo_matches_reference() {
+        let mut rng = Lcg(0xDEAD_BEEF_CAFE_F00D);
+        let mut pt = piece_tree::PieceTree::new("seed");
+        let mut current = String::from("seed");
+        let mut past: Vec<String> = Vec::new();
+        let mut future: Vec<String> = Vec::new();
+
+        for step in 0..1000 {
+            let op = rng.next() % 100;
+            let description: String;
+
+            if op < 40 {
+                let n = 1 + rng.below(4);
+                let snippet: String = (0..n)
+                    .map(|_| char::from(b'a' + rng.below(4) as u8))
+                    .collect();
+                let pos = rng.below(current.len() + 1);
+                description = format!("insert({:?}, {})", snippet, pos);
+                past.push(current.clone());
+                pt.insert(&snippet, pos);
+                current.insert_str(pos, &snippet);
+                future.clear();
+            } else if op < 65 && !current.is_empty() {
+                let pos = rng.below(current.len());
+                let del = 1 + rng.below(current.len() - pos);
+                description = format!("delete({}, {})", pos, del);
+                past.push(current.clone());
+                pt.delete(pos, del);
+                current.replace_range(pos..pos + del, "");
+                future.clear();
+            } else if op < 85 {
+                description = "undo".to_string();
+                if let Some(prev) = past.pop() {
+                    future.push(current.clone());
+                    current = prev;
+                }
+                pt.undo();
+            } else {
+                description = "redo".to_string();
+                if let Some(next) = future.pop() {
+                    past.push(current.clone());
+                    current = next;
+                }
+                pt.redo();
+            }
+
+            assert_eq!(
+                current,
+                get_text(&pt),
+                "step {} ({}): undo/redo state diverged",
+                step,
+                description
+            );
+        }
+    }
 }
 
