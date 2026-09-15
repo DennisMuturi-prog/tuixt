@@ -1019,5 +1019,195 @@ mod tests {
             );
         }
     }
+
+    // ============================ get_sub_text ============================
+    //
+    // `get_sub_text` copies `length` bytes starting at `start_index` into the
+    // caller's buffer, replacing whatever was there first. As with `delete`,
+    // the requested range is clamped to the document: a start past the end
+    // yields an empty buffer, and a length that runs past the end stops at the
+    // end. Indices are byte offsets, matching the rest of the piece tree.
+
+    fn get_sub_text(pt: &piece_tree::PieceTree, start_index: usize, length: usize) -> String {
+        let mut content = String::new();
+        pt.get_sub_text(&mut content, start_index, length);
+        content
+    }
+
+    #[test]
+    fn test_get_sub_text_basic_slice() {
+        let pt = piece_tree::PieceTree::new("hello world");
+        assert_eq!("hello", get_sub_text(&pt, 0, 5));
+        assert_eq!("world", get_sub_text(&pt, 6, 5));
+        assert_eq!("lo wo", get_sub_text(&pt, 3, 5));
+    }
+
+    #[test]
+    fn test_get_sub_text_whole_document() {
+        let pt = piece_tree::PieceTree::new("hello world");
+        assert_eq!("hello world", get_sub_text(&pt, 0, 11));
+    }
+
+    #[test]
+    fn test_get_sub_text_single_char_and_boundaries() {
+        let pt = piece_tree::PieceTree::new("abcdef");
+        assert_eq!("a", get_sub_text(&pt, 0, 1));
+        assert_eq!("b", get_sub_text(&pt, 1, 1));
+        assert_eq!("f", get_sub_text(&pt, 5, 1));
+        assert_eq!("abcdef", get_sub_text(&pt, 0, 6));
+    }
+
+    #[test]
+    fn test_get_sub_text_zero_length_is_empty() {
+        let pt = piece_tree::PieceTree::new("hello");
+        assert_eq!("", get_sub_text(&pt, 0, 0));
+        assert_eq!("", get_sub_text(&pt, 2, 0));
+        assert_eq!("", get_sub_text(&pt, 5, 0));
+    }
+
+    #[test]
+    fn test_get_sub_text_length_past_end_clamps() {
+        let pt = piece_tree::PieceTree::new("hello");
+        assert_eq!("hello", get_sub_text(&pt, 0, 50));
+        assert_eq!("llo", get_sub_text(&pt, 2, 50));
+        assert_eq!("o", get_sub_text(&pt, 4, 50));
+    }
+
+    #[test]
+    fn test_get_sub_text_start_at_or_past_end_is_empty() {
+        let pt = piece_tree::PieceTree::new("hello");
+        assert_eq!("", get_sub_text(&pt, 5, 3));
+        assert_eq!("", get_sub_text(&pt, 100, 5));
+    }
+
+    #[test]
+    fn test_get_sub_text_on_empty_document() {
+        let pt = piece_tree::PieceTree::new("");
+        assert_eq!("", get_sub_text(&pt, 0, 0));
+        assert_eq!("", get_sub_text(&pt, 0, 10));
+        assert_eq!("", get_sub_text(&pt, 10, 10));
+    }
+
+    #[test]
+    fn test_get_sub_text_replaces_existing_buffer_contents() {
+        let pt = piece_tree::PieceTree::new("hello world");
+        let mut content = String::from("stale contents that must be replaced");
+        pt.get_sub_text(&mut content, 6, 5);
+        assert_eq!("world", content);
+    }
+
+    #[test]
+    fn test_get_sub_text_replaces_with_empty_when_out_of_range() {
+        let pt = piece_tree::PieceTree::new("hello");
+        let mut content = String::from("stale");
+        pt.get_sub_text(&mut content, 100, 5);
+        assert_eq!("", content);
+    }
+
+    #[test]
+    fn test_get_sub_text_spans_pieces_after_inserts() {
+        let mut pt = piece_tree::PieceTree::new("ABC");
+        pt.insert("DEF", 3);
+        pt.insert("GHI", 6);
+        assert_eq!("ABCDEFGHI", get_text(&pt));
+        assert_eq!("CDEFGH", get_sub_text(&pt, 2, 6));
+        assert_eq!("ABCDEFGHI", get_sub_text(&pt, 0, 9));
+        assert_eq!("", get_sub_text(&pt, 4, 0));
+    }
+
+    #[test]
+    fn test_get_sub_text_after_delete() {
+        let mut pt = piece_tree::PieceTree::new("Hello Beautiful World");
+        pt.delete(5, 10);
+        assert_eq!("Hello World", get_text(&pt));
+        assert_eq!("Hello", get_sub_text(&pt, 0, 5));
+        assert_eq!("World", get_sub_text(&pt, 6, 5));
+        assert_eq!(" World", get_sub_text(&pt, 5, 6));
+    }
+
+    #[test]
+    fn test_get_sub_text_after_prepend_and_append() {
+        let mut pt = piece_tree::PieceTree::new("middle");
+        pt.insert("start-", 0);
+        pt.insert("-end", 12);
+        assert_eq!("start-middle-end", get_text(&pt));
+        assert_eq!("start", get_sub_text(&pt, 0, 5));
+        assert_eq!("middle", get_sub_text(&pt, 6, 6));
+        assert_eq!("-", get_sub_text(&pt, 5, 1));
+        assert_eq!("end", get_sub_text(&pt, 13, 3));
+    }
+
+    #[test]
+    fn test_get_sub_text_after_undo_and_redo() {
+        let mut pt = piece_tree::PieceTree::new("hello");
+        pt.insert("X", 0);
+        assert_eq!("Xhello", get_text(&pt));
+        assert_eq!("Xhell", get_sub_text(&pt, 0, 5));
+
+        pt.undo();
+        assert_eq!("hello", get_text(&pt));
+        assert_eq!("ell", get_sub_text(&pt, 1, 3));
+
+        pt.redo();
+        assert_eq!("Xhello", get_text(&pt));
+        assert_eq!("ello", get_sub_text(&pt, 2, 4));
+    }
+
+    #[test]
+    fn test_get_sub_text_unicode_multibyte_characters() {
+        // "🦀" is 4 bytes: [0xF0, 0x9F, 0xA6, 0x80].
+        let pt = piece_tree::PieceTree::new("hello 🦀 world");
+        assert_eq!("hello", get_sub_text(&pt, 0, 5));
+        assert_eq!("🦀", get_sub_text(&pt, 6, 4));
+        assert_eq!(" 🦀 ", get_sub_text(&pt, 5, 6));
+        assert_eq!("world", get_sub_text(&pt, 11, 5));
+    }
+
+    #[test]
+    fn test_get_sub_text_fuzz_matches_reference_slice() {
+        let mut pt = piece_tree::PieceTree::new("the quick brown fox");
+        let mut reference = String::from("the quick brown fox");
+
+        let mut rng = Lcg(0x0123_4567_89AB_CDEF);
+
+        for step in 0..500 {
+            if reference.is_empty() {
+                let snippet = format!("_{}_", step);
+                pt.insert(&snippet, 0);
+                reference.insert_str(0, &snippet);
+            }
+
+            // Ask for arbitrary (often out-of-range) windows; the tree must
+            // clamp exactly the way slicing a bounded range does.
+            let start = rng.below(reference.len() + 3);
+            let length = rng.below(reference.len() + 3);
+            let clamped_start = start.min(reference.len());
+            let clamped_end = (clamped_start + length).min(reference.len());
+            let expected = reference[clamped_start..clamped_end].to_string();
+
+            assert_eq!(
+                expected,
+                get_sub_text(&pt, start, length),
+                "step {}: get_sub_text({}, {}) on {:?}",
+                step,
+                start,
+                length,
+                reference
+            );
+
+            // Keep the document churning so windows routinely cross pieces.
+            if rng.next() % 2 == 0 {
+                let pos = rng.below(reference.len() + 1);
+                let snippet = format!("({})", step);
+                pt.insert(&snippet, pos);
+                reference.insert_str(pos, &snippet);
+            } else {
+                let pos = rng.below(reference.len());
+                let del = 1 + rng.below(reference.len() - pos);
+                pt.delete(pos, del);
+                reference.replace_range(pos..pos + del, "");
+            }
+        }
+    }
 }
 

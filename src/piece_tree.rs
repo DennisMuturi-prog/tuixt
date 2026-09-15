@@ -1,5 +1,5 @@
 use core::panic;
-use std::rc::Rc;
+use std::{cmp::min, rc::Rc};
 
 pub struct PieceTree {
     original: String,
@@ -53,16 +53,85 @@ impl PieceTree {
             self.in_order_traversal(root_node, content);
         }
     }
+    pub fn get_sub_text(&self, content: &mut String, start_index: usize, length: usize) {
+        if let Some(root_node) = self.root.as_ref() {
+            content.clear();
+            self.get_sub_text_helper(root_node, content, start_index, length);
+        }
+    }
+    fn get_sub_text_helper(
+        &self,
+        current_node: &Rc<Node>,
+        content: &mut String,
+        index: usize,
+        length: usize,
+    ) {
+        if current_node == &self.black_leaf {
+            return;
+        }
+        let mut index = index;
+        let mut length = length;
+        if index == 0 && length >= current_node.left_subtree_len {
+            self.in_order_traversal(current_node.left.as_ref().unwrap(), content);
+            length = length.saturating_sub(current_node.left_subtree_len);
+            index = current_node.left_subtree_len;
+        } else if index < current_node.left_subtree_len {
+            self.get_sub_text_helper(current_node.left.as_ref().unwrap(), content, index, length);
+            let length_taken = min(current_node.left_subtree_len - index, length);
+            length -= length_taken;
+            index = current_node.left_subtree_len;
+        }
+        if length == 0 {
+            return;
+        }
+        if index < current_node.left_subtree_len + current_node.length {
+            let offset_in_node = index - current_node.left_subtree_len;
+            let content_str = match current_node.buffer_type {
+                BufferType::Original => {
+                    &self.original[current_node.start + offset_in_node
+                        ..min(
+                            current_node.start + offset_in_node + length,
+                            current_node.start + current_node.length
+                        )]
+                }
+                BufferType::Add => {
+                    &self.add[current_node.start + offset_in_node
+                        ..min(
+                            current_node.start + offset_in_node + length,
+                            current_node.start + current_node.length
+                        )]
+                }
+            };
+            content.push_str(content_str);
+            if length <= current_node.length - offset_in_node {
+                return;
+            }
+            length -= current_node.length - offset_in_node;
+            index = current_node.left_subtree_len + current_node.length;
+        }
+        if length == 0 {
+            return;
+        }
+
+        index -= current_node.left_subtree_len + current_node.length;
+        let right_subtree_len =
+            current_node.subtree_len - current_node.left_subtree_len - current_node.length;
+        if index == 0 && length >= right_subtree_len {
+            self.in_order_traversal(current_node.right.as_ref().unwrap(), content);
+        } else {
+            self.get_sub_text_helper(current_node.right.as_ref().unwrap(), content, index, length);
+        }
+    }
     pub fn undo(&mut self) {
         if let Some(replacement_root) = self.undo_stack.pop() {
-                self.redo_stack.push(self.root.clone());
-                self.root = replacement_root;
+            self.redo_stack.push(self.root.clone());
+            self.root = replacement_root;
         };
     }
     pub fn redo(&mut self) {
         if let Some(replacement_root) = self.redo_stack.pop() {
-                self.undo_stack.push(self.root.clone());
-                self.root = replacement_root;
+            self.undo_stack.push(self.root.clone());
+            self.root = replacement_root;
         };
     }
 
