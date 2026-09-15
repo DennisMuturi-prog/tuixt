@@ -50,6 +50,7 @@ impl PieceTree {
     }
     pub fn get_text(&self, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
+            content.clear();
             self.in_order_traversal(root_node, content);
         }
     }
@@ -91,14 +92,14 @@ impl PieceTree {
                     &self.original[current_node.start + offset_in_node
                         ..min(
                             current_node.start + offset_in_node + length,
-                            current_node.start + current_node.length
+                            current_node.start + current_node.length,
                         )]
                 }
                 BufferType::Add => {
                     &self.add[current_node.start + offset_in_node
                         ..min(
                             current_node.start + offset_in_node + length,
-                            current_node.start + current_node.length
+                            current_node.start + current_node.length,
                         )]
                 }
             };
