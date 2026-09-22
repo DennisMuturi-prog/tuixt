@@ -4,15 +4,17 @@ use std::{cmp::min, rc::Rc};
 #[derive(Debug)]
 pub struct PieceTree {
     original: String,
+    original_line_starts: Vec<usize>,
     add: String,
+    add_line_starts: Vec<usize>,
     root: Option<Rc<Node>>,
     undo_stack: Vec<Option<Rc<Node>>>,
     redo_stack: Vec<Option<Rc<Node>>>,
     black_leaf: Rc<Node>,
     double_black_leaf: Rc<Node>,
-    last_change_in_buffer: usize,
+    last_change_in_buffer: BufferPosition,
 }
-impl Default for PieceTree{
+impl Default for PieceTree {
     fn default() -> Self {
         Self::new("")
     }
@@ -26,15 +28,29 @@ impl PieceTree {
                 root: None,
                 undo_stack: Vec::new(),
                 redo_stack: Vec::new(),
+                original_line_starts: vec![0],
+                add_line_starts: vec![0],
                 double_black_leaf: Rc::new(Node::new_double_black_leaf()),
                 black_leaf: Rc::new(Node::new_black_leaf()),
-                last_change_in_buffer: 0,
+                last_change_in_buffer: BufferPosition::default(),
             }
         } else {
+            let mut original_line_starts = Vec::new();
+            original_line_starts.push(0);
+            let start = BufferPosition { line: 0, column: 0 };
+            find_line_starts(original_content, 0, &mut original_line_starts);
             let original = String::from(original_content);
+            let end = BufferPosition {
+                line: original_line_starts.len() - 1,
+                column: original.len() - original_line_starts[original_line_starts.len() - 1],
+            };
+            let line_feed_count =
+                calculate_line_feed_count(&original, &original_line_starts, start, end);
             let black_leaf = Rc::new(Node::new_black_leaf());
             let root = Some(Rc::new(Node::new(
-                0,
+                start,
+                end,
+                line_feed_count,
                 original.len(),
                 BufferType::Original,
                 Color::Black,
@@ -50,7 +66,9 @@ impl PieceTree {
                 redo_stack: Vec::new(),
                 black_leaf,
                 double_black_leaf: Rc::new(Node::new_double_black_leaf()),
-                last_change_in_buffer: 0,
+                last_change_in_buffer: BufferPosition::default(),
+                original_line_starts,
+                add_line_starts: vec![0],
             }
         }
     }
@@ -95,17 +113,21 @@ impl PieceTree {
             let offset_in_node = index - current_node.left_subtree_len;
             let content_str = match current_node.buffer_type {
                 BufferType::Original => {
-                    &self.original[current_node.start + offset_in_node
+                    let start_offset = self.original_line_starts[current_node.start.line]
+                        + current_node.start.column;
+                    &self.original[start_offset + offset_in_node
                         ..min(
-                            current_node.start + offset_in_node + length,
-                            current_node.start + current_node.length,
+                            start_offset + offset_in_node + length,
+                            start_offset + current_node.length,
                         )]
                 }
                 BufferType::Add => {
-                    &self.add[current_node.start + offset_in_node
+                    let start_offset =
+                        self.add_line_starts[current_node.start.line] + current_node.start.column;
+                    &self.add[start_offset + offset_in_node
                         ..min(
-                            current_node.start + offset_in_node + length,
-                            current_node.start + current_node.length,
+                            start_offset + offset_in_node + length,
+                            start_offset + current_node.length,
                         )]
                 }
             };
@@ -148,8 +170,16 @@ impl PieceTree {
         }
         self.in_order_traversal(node.left.as_ref().unwrap(), content);
         let content_str = match node.buffer_type {
-            BufferType::Original => &self.original[node.start..node.start + node.length],
-            BufferType::Add => &self.add[node.start..node.start + node.length],
+            BufferType::Original => {
+                let start_offset = self.original_line_starts[node.start.line] + node.start.column;
+                let end_offset = self.original_line_starts[node.end.line] + node.end.column;
+                &self.original[start_offset..end_offset]
+            }
+            BufferType::Add => {
+                let start_offset = self.add_line_starts[node.start.line] + node.start.column;
+                let end_offset = self.add_line_starts[node.end.line] + node.end.column;
+                &self.add[start_offset..end_offset]
+            }
         };
         content.push_str(content_str);
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
@@ -167,6 +197,8 @@ impl PieceTree {
                 if node.color == Color::Black {
                     let new_node = Rc::new(Node::new(
                         left.start,
+                        left.end,
+                        left.line_feed_count,
                         left.length,
                         left.buffer_type,
                         left.color.plus_black(),
@@ -182,6 +214,8 @@ impl PieceTree {
         let new_right = self.remove_right_most(node.right.as_ref().unwrap().clone());
         let new_current_node = Rc::new(Node::new(
             node.start,
+            node.end,
+            node.line_feed_count,
             node.length,
             node.buffer_type,
             node.color,
@@ -199,6 +233,8 @@ impl PieceTree {
         }
         NodeInfo {
             start: dest.start,
+            end: dest.end,
+            line_feed_count: dest.line_feed_count,
             length: dest.length,
             buffer_type: dest.buffer_type,
         }
@@ -248,6 +284,8 @@ impl PieceTree {
             );
             let new_current_node = Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -264,6 +302,8 @@ impl PieceTree {
             );
             let new_current_node = Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -279,6 +319,8 @@ impl PieceTree {
 
             self.bubble(Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -292,6 +334,8 @@ impl PieceTree {
 
             self.bubble(Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -310,6 +354,8 @@ impl PieceTree {
             let new_left = self.remove_right_most(left);
             let new_node = Rc::new(Node::new(
                 node_info.start,
+                node_info.end,
+                node_info.line_feed_count,
                 node_info.length,
                 node_info.buffer_type,
                 node.color,
@@ -329,6 +375,8 @@ impl PieceTree {
                 if node.color == Color::Black {
                     Rc::new(Node::new(
                         left.start,
+                        left.end,
+                        left.line_feed_count,
                         left.length,
                         left.buffer_type,
                         left.color.plus_black(),
@@ -342,6 +390,8 @@ impl PieceTree {
                 if node.color == Color::Black {
                     Rc::new(Node::new(
                         right.start,
+                        right.end,
+                        right.line_feed_count,
                         right.length,
                         right.buffer_type,
                         right.color.plus_black(),
@@ -352,6 +402,127 @@ impl PieceTree {
                     right
                 }
             }
+        }
+    }
+    fn shrink_piece_to_suffix(&self, node: &Rc<Node>, end_node_pos_remainder: usize) -> NodeInfo {
+        let start_offset = match node.buffer_type {
+            BufferType::Original => {
+                self.original_line_starts[node.start.line]
+                    + node.start.column
+                    + end_node_pos_remainder
+            }
+            BufferType::Add => {
+                self.add_line_starts[node.start.line] + node.start.column + end_node_pos_remainder
+            }
+        };
+        let start = match node.buffer_type {
+            BufferType::Original => find_nearest_start_and_column_in_it(
+                &self.original_line_starts,
+                node.start.line,
+                start_offset,
+            ),
+            BufferType::Add => find_nearest_start_and_column_in_it(
+                &self.add_line_starts,
+                node.start.line,
+                start_offset,
+            ),
+        };
+        let buffer = match node.buffer_type {
+            BufferType::Original => &self.original,
+            BufferType::Add => &self.add,
+        };
+        let line_starts = match node.buffer_type {
+            BufferType::Original => &self.original_line_starts,
+            BufferType::Add => &self.add_line_starts,
+        };
+        let line_feed_count = calculate_line_feed_count(buffer, line_starts, start, node.end);
+
+        NodeInfo {
+            start,
+            end: node.end,
+            line_feed_count,
+            length: node.length - end_node_pos_remainder,
+            buffer_type: node.buffer_type,
+        }
+    }
+    fn shrink_piece_to_prefix(&self, node: &Rc<Node>, start_node_pos_remainder: usize) -> NodeInfo {
+        let end_offset = match node.buffer_type {
+            BufferType::Original => {
+                self.original_line_starts[node.start.line]
+                    + node.start.column
+                    + start_node_pos_remainder
+            }
+            BufferType::Add => {
+                self.add_line_starts[node.start.line] + node.start.column + start_node_pos_remainder
+            }
+        };
+        let end = match node.buffer_type {
+            BufferType::Original => find_nearest_start_and_column_in_it(
+                &self.original_line_starts,
+                node.start.line,
+                end_offset,
+            ),
+            BufferType::Add => find_nearest_start_and_column_in_it(
+                &self.add_line_starts,
+                node.start.line,
+                end_offset,
+            ),
+        };
+        let buffer = match node.buffer_type {
+            BufferType::Original => &self.original,
+            BufferType::Add => &self.add,
+        };
+        let line_starts = match node.buffer_type {
+            BufferType::Original => &self.original_line_starts,
+            BufferType::Add => &self.add_line_starts,
+        };
+        let line_feed_count = calculate_line_feed_count(buffer, line_starts, node.start, end);
+        NodeInfo {
+            start: node.start,
+            end,
+            line_feed_count,
+            length: start_node_pos_remainder,
+            buffer_type: node.buffer_type,
+        }
+    }
+    fn expand_piece(&self, node: &Rc<Node>, start_node_pos_remainder: usize) -> NodeInfo {
+        let end_offset = match node.buffer_type {
+            BufferType::Original => {
+                self.original_line_starts[node.end.line]
+                    + node.end.column
+                    + start_node_pos_remainder
+            }
+            BufferType::Add => {
+                self.add_line_starts[node.end.line] + node.end.column + start_node_pos_remainder
+            }
+        };
+        let end = match node.buffer_type {
+            BufferType::Original => find_nearest_start_and_column_in_it(
+                &self.original_line_starts,
+                node.start.line,
+                end_offset,
+            ),
+            BufferType::Add => find_nearest_start_and_column_in_it(
+                &self.add_line_starts,
+                node.start.line,
+                end_offset,
+            ),
+        };
+        let buffer = match node.buffer_type {
+            BufferType::Original => &self.original,
+            BufferType::Add => &self.add,
+        };
+        let line_starts = match node.buffer_type {
+            BufferType::Original => &self.original_line_starts,
+            BufferType::Add => &self.add_line_starts,
+        };
+        let line_feed_count = calculate_line_feed_count(buffer, line_starts, node.start, end);
+        NodeInfo {
+            start: node.start,
+            end,
+            line_feed_count,
+            length: node.length + start_node_pos_remainder,
+            buffer_type: node.buffer_type,
         }
     }
     pub fn delete(&mut self, offset: usize, length: usize) {
@@ -381,33 +552,27 @@ impl PieceTree {
                 } else if start_node_pos.remainder == 0
                     && end_node_pos.remainder < start_piece.length
                 {
-                    let suffix = NodeInfo {
-                        start: start_piece.start + end_node_pos.remainder,
-                        length: start_piece.length - end_node_pos.remainder,
-                        buffer_type: start_piece.buffer_type,
-                    };
+                    let suffix = self.shrink_piece_to_suffix(&start_piece, end_node_pos.remainder);
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, suffix);
                     self.root = Some(new_root);
                 } else if start_node_pos.remainder > 0
                     && end_node_pos.remainder == start_piece.length
                 {
-                    let prefix = NodeInfo {
-                        start: start_piece.start,
-                        length: start_node_pos.remainder,
-                        buffer_type: start_piece.buffer_type,
-                    };
+                    let prefix =
+                        self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
                     self.root = Some(new_root);
                 } else {
-                    let prefix = NodeInfo {
-                        start: start_piece.start,
-                        length: start_node_pos.remainder,
-                        buffer_type: start_piece.buffer_type,
-                    };
+                    let prefix =
+                        self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
                     let new_root = Self::replace_at(root_node, start_node_pos.start_offset, prefix);
+                    let suffix_info =
+                        self.shrink_piece_to_suffix(&start_piece, end_node_pos.remainder);
                     let suffix = Rc::new(Node::new(
-                        start_piece.start + end_node_pos.remainder,
-                        start_piece.length - end_node_pos.remainder,
+                        suffix_info.start,
+                        suffix_info.end,
+                        suffix_info.line_feed_count,
+                        suffix_info.length,
                         start_piece.buffer_type,
                         Color::Red,
                         Some(self.black_leaf.clone()),
@@ -421,16 +586,9 @@ impl PieceTree {
                     self.root = Some(self.blacken(new_root));
                 }
             } else {
-                let left = NodeInfo {
-                    start: start_piece.start,
-                    length: start_node_pos.remainder,
-                    buffer_type: start_piece.buffer_type,
-                };
-                let right = NodeInfo {
-                    start: end_piece.start + end_node_pos.remainder,
-                    length: end_piece.length - end_node_pos.remainder,
-                    buffer_type: end_piece.buffer_type,
-                };
+                let left = self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
+
+                let right = self.shrink_piece_to_suffix(&end_piece, end_node_pos.remainder);
                 let mut between: Vec<usize> = Vec::new();
                 let path = &mut start_node_pos.path;
                 let mut at = start_node_pos.start_offset + start_piece.length;
@@ -494,6 +652,8 @@ impl PieceTree {
 
             Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -510,6 +670,8 @@ impl PieceTree {
 
             Rc::new(Node::new(
                 current_node.start,
+                current_node.end,
+                current_node.line_feed_count,
                 current_node.length,
                 current_node.buffer_type,
                 current_node.color,
@@ -519,6 +681,8 @@ impl PieceTree {
         } else {
             Rc::new(Node::new(
                 node_that_replaces.start,
+                node_that_replaces.end,
+                node_that_replaces.line_feed_count,
                 node_that_replaces.length,
                 node_that_replaces.buffer_type,
                 current_node.color,
@@ -528,10 +692,22 @@ impl PieceTree {
         }
     }
     fn pre_insert(&mut self, content: &str) -> Rc<Node> {
-        let previous_len = self.add.len();
+        let start = BufferPosition {
+            line: self.add_line_starts.len() - 1,
+            column: self.add.len() - self.add_line_starts[self.add_line_starts.len() - 1],
+        };
+        find_line_starts(content, self.add.len(), &mut self.add_line_starts);
         self.add.push_str(content);
+        let end = BufferPosition {
+            line: self.add_line_starts.len() - 1,
+            column: self.add.len() - self.add_line_starts[self.add_line_starts.len() - 1],
+        };
+        let line_feed_count =
+            calculate_line_feed_count(&self.add, &self.add_line_starts, start, end);
         Rc::new(Node::new(
-            previous_len,
+            start,
+            end,
+            line_feed_count,
             content.len(),
             BufferType::Add,
             Color::Red,
@@ -548,51 +724,48 @@ impl PieceTree {
             let node_to_insert = self.pre_insert(content);
             let node_position = self.node_at(root_node.clone(), offset);
             let piece = Self::last(&node_position.path);
-            if piece.start + piece.length == self.last_change_in_buffer
+            if piece.end == self.last_change_in_buffer
                 && node_position.start_offset + piece.length == offset
                 && piece.buffer_type == BufferType::Add
             {
-                let replacement = NodeInfo {
-                    start: piece.start,
-                    length: piece.length + content.len(),
-                    buffer_type: piece.buffer_type,
-                };
+                let replacement = self.expand_piece(&piece, content.len());
+                self.last_change_in_buffer = replacement.end;
                 let new_root = Self::replace_at(root_node, node_position.start_offset, replacement);
                 self.root = Some(self.blacken(new_root));
-                self.last_change_in_buffer = self.add.len();
                 self.redo_stack.clear();
                 return;
             }
             if node_position.start_offset + piece.length > offset
                 && offset != node_position.start_offset
             {
-                let first_part = NodeInfo {
-                    start: piece.start,
-                    length: node_position.remainder,
-                    buffer_type: piece.buffer_type,
-                };
+                let first_part = self.shrink_piece_to_prefix(&piece, node_position.remainder);
                 let new_root = Self::replace_at(root_node, node_position.start_offset, first_part);
+                let second_part_info = self.shrink_piece_to_suffix(&piece, node_position.remainder);
                 let second_part = Rc::new(Node::new(
-                    piece.start + node_position.remainder,
-                    piece.length - node_position.remainder,
+                    second_part_info.start,
+                    second_part_info.end,
+                    second_part_info.line_feed_count,
+                    second_part_info.length,
                     piece.buffer_type,
                     Color::Red,
                     Some(self.black_leaf.clone()),
                     Some(self.black_leaf.clone()),
                 ));
+                self.last_change_in_buffer = node_to_insert.end;
                 let new_root = self.insert_at(new_root, offset, node_to_insert);
                 let new_root = self.insert_at(new_root, offset + content.len(), second_part);
                 self.root = Some(self.blacken(new_root));
             } else {
+                self.last_change_in_buffer = node_to_insert.end;
                 let new_root = self.insert_at(root_node.clone(), offset, node_to_insert);
                 self.root = Some(self.blacken(new_root));
             }
         } else {
             self.undo_stack.push(None);
             let node_to_insert = self.pre_insert(content);
+            self.last_change_in_buffer = node_to_insert.end;
             self.root = Some(self.blacken(node_to_insert));
         }
-        self.last_change_in_buffer = self.add.len();
         self.redo_stack.clear();
     }
     fn blacken(&self, node: Rc<Node>) -> Rc<Node> {
@@ -601,6 +774,8 @@ impl PieceTree {
         }
         Rc::new(Node::new(
             node.start,
+            node.end,
+            node.line_feed_count,
             node.length,
             node.buffer_type,
             Color::Black,
@@ -615,6 +790,8 @@ impl PieceTree {
             let z = self.redder(y.right.as_ref().unwrap());
             let new_y = Rc::new(Node::new(
                 y.start,
+                y.end,
+                y.line_feed_count,
                 y.length,
                 y.buffer_type,
                 y.color.plus_black(),
@@ -634,6 +811,8 @@ impl PieceTree {
                 let y = x.right.as_ref().unwrap().clone();
                 let new_x = Rc::new(Node::new(
                     x.start,
+                    x.end,
+                    x.line_feed_count,
                     x.length,
                     x.buffer_type,
                     Color::Black,
@@ -642,6 +821,8 @@ impl PieceTree {
                 ));
                 let new_z = Rc::new(Node::new(
                     z.start,
+                    z.end,
+                    z.line_feed_count,
                     z.length,
                     z.buffer_type,
                     Color::Black,
@@ -655,6 +836,8 @@ impl PieceTree {
                 };
                 let new_y = Rc::new(Node::new(
                     y.start,
+                    y.end,
+                    y.line_feed_count,
                     y.length,
                     y.buffer_type,
                     new_y_color,
@@ -667,6 +850,8 @@ impl PieceTree {
                 let x = y.left.as_ref().unwrap().clone();
                 let new_x = Rc::new(Node::new(
                     x.start,
+                    x.end,
+                    x.line_feed_count,
                     x.length,
                     x.buffer_type,
                     Color::Black,
@@ -675,6 +860,8 @@ impl PieceTree {
                 ));
                 let new_z = Rc::new(Node::new(
                     z.start,
+                    z.end,
+                    z.line_feed_count,
                     z.length,
                     z.buffer_type,
                     Color::Black,
@@ -688,6 +875,8 @@ impl PieceTree {
                 };
                 let new_y = Rc::new(Node::new(
                     y.start,
+                    y.end,
+                    y.line_feed_count,
                     y.length,
                     y.buffer_type,
                     new_y_color,
@@ -701,6 +890,8 @@ impl PieceTree {
                 let y = z.left.as_ref().unwrap().clone();
                 let new_x = Rc::new(Node::new(
                     x.start,
+                    x.end,
+                    x.line_feed_count,
                     x.length,
                     x.buffer_type,
                     Color::Black,
@@ -709,6 +900,8 @@ impl PieceTree {
                 ));
                 let new_z = Rc::new(Node::new(
                     z.start,
+                    z.end,
+                    z.line_feed_count,
                     z.length,
                     z.buffer_type,
                     Color::Black,
@@ -722,6 +915,8 @@ impl PieceTree {
                 };
                 let new_y = Rc::new(Node::new(
                     y.start,
+                    y.end,
+                    y.line_feed_count,
                     y.length,
                     y.buffer_type,
                     new_y_color,
@@ -735,6 +930,8 @@ impl PieceTree {
                 let z = y.right.as_ref().unwrap().clone();
                 let new_x = Rc::new(Node::new(
                     x.start,
+                    x.end,
+                    x.line_feed_count,
                     x.length,
                     x.buffer_type,
                     Color::Black,
@@ -743,6 +940,8 @@ impl PieceTree {
                 ));
                 let new_z = Rc::new(Node::new(
                     z.start,
+                    z.end,
+                    z.line_feed_count,
                     z.length,
                     z.buffer_type,
                     Color::Black,
@@ -756,6 +955,8 @@ impl PieceTree {
                 };
                 let new_y = Rc::new(Node::new(
                     y.start,
+                    y.end,
+                    y.line_feed_count,
                     y.length,
                     y.buffer_type,
                     new_y_color,
@@ -777,6 +978,8 @@ impl PieceTree {
             let y = x.right.as_ref().unwrap().clone();
             let new_w = Rc::new(Node::new(
                 w.start,
+                w.end,
+                w.line_feed_count,
                 w.length,
                 w.buffer_type,
                 Color::Red,
@@ -785,6 +988,8 @@ impl PieceTree {
             ));
             let new_x = Rc::new(Node::new(
                 x.start,
+                x.end,
+                x.line_feed_count,
                 x.length,
                 x.buffer_type,
                 Color::Black,
@@ -794,6 +999,8 @@ impl PieceTree {
             let new_x = Self::rebalance(new_x);
             let new_z = Rc::new(Node::new(
                 z.start,
+                z.end,
+                z.line_feed_count,
                 z.length,
                 z.buffer_type,
                 Color::Black,
@@ -802,6 +1009,8 @@ impl PieceTree {
             ));
             let new_y = Rc::new(Node::new(
                 y.start,
+                y.end,
+                y.line_feed_count,
                 y.length,
                 y.buffer_type,
                 Color::Black,
@@ -822,6 +1031,8 @@ impl PieceTree {
             let w = z.right.as_ref().unwrap().clone();
             let new_w = Rc::new(Node::new(
                 w.start,
+                w.end,
+                w.line_feed_count,
                 w.length,
                 w.buffer_type,
                 Color::Red,
@@ -830,6 +1041,8 @@ impl PieceTree {
             ));
             let new_x = Rc::new(Node::new(
                 x.start,
+                x.end,
+                x.line_feed_count,
                 x.length,
                 x.buffer_type,
                 Color::Black,
@@ -838,6 +1051,8 @@ impl PieceTree {
             ));
             let new_z = Rc::new(Node::new(
                 z.start,
+                z.end,
+                z.line_feed_count,
                 z.length,
                 z.buffer_type,
                 Color::Black,
@@ -847,6 +1062,8 @@ impl PieceTree {
             let new_z = Self::rebalance(new_z);
             let new_y = Rc::new(Node::new(
                 y.start,
+                y.end,
+                y.line_feed_count,
                 y.length,
                 y.buffer_type,
                 Color::Black,
@@ -867,6 +1084,8 @@ impl PieceTree {
 
         Rc::new(Node::new(
             node.start,
+            node.end,
+            node.line_feed_count,
             node.length,
             node.buffer_type,
             node.color.minus_black(),
@@ -877,19 +1096,30 @@ impl PieceTree {
 }
 #[derive(PartialEq, Debug)]
 struct Node {
-    start: usize,
+    start: BufferPosition,
+    end: BufferPosition,
     length: usize,
     buffer_type: BufferType,
+    line_feed_count: usize,
+    subtree_line_feed_count: usize,
+    left_subtree_line_feed_count: usize,
     color: Color,
     left_subtree_len: usize,
     subtree_len: usize,
     left: Option<Rc<Node>>,
     right: Option<Rc<Node>>,
 }
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+struct BufferPosition {
+    line: usize,
+    column: usize,
+}
 
 impl Node {
     fn new(
-        start: usize,
+        start: BufferPosition,
+        end: BufferPosition,
+        line_feed_count: usize,
         length: usize,
         buffer_type: BufferType,
         color: Color,
@@ -904,10 +1134,24 @@ impl Node {
             Some(r) => r.subtree_len,
             None => 0,
         };
+        let left_subtree_line_feed_count = match left.as_ref() {
+            Some(l) => l.subtree_line_feed_count,
+            None => 0,
+        };
+        let right_subtree_line_feed_count = match right.as_ref() {
+            Some(r) => r.subtree_line_feed_count,
+            None => 0,
+        };
         let subtree_len = left_subtree_len + length + right_subtree_len;
+        let subtree_line_feed_count =
+            left_subtree_line_feed_count + line_feed_count + right_subtree_line_feed_count;
         Self {
             start,
+            end,
             length,
+            line_feed_count,
+            subtree_line_feed_count,
+            left_subtree_line_feed_count,
             buffer_type,
             color,
             left,
@@ -918,7 +1162,7 @@ impl Node {
     }
     fn new_black_leaf() -> Self {
         Self {
-            start: 0,
+            start: BufferPosition::default(),
             length: 0,
             buffer_type: BufferType::Original,
             color: Color::Black,
@@ -926,11 +1170,15 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
+            end: BufferPosition::default(),
+            line_feed_count: 0,
+            subtree_line_feed_count: 0,
+            left_subtree_line_feed_count: 0,
         }
     }
     fn new_double_black_leaf() -> Self {
         Self {
-            start: 0,
+            start: BufferPosition::default(),
             length: 0,
             buffer_type: BufferType::Original,
             color: Color::DoubleBlack,
@@ -938,6 +1186,10 @@ impl Node {
             subtree_len: 0,
             left: None,
             right: None,
+            end: BufferPosition::default(),
+            line_feed_count: 0,
+            subtree_line_feed_count: 0,
+            left_subtree_line_feed_count: 0,
         }
     }
 
@@ -1004,7 +1256,9 @@ impl Node {
 }
 
 struct NodeInfo {
-    start: usize,
+    start: BufferPosition,
+    end: BufferPosition,
+    line_feed_count: usize,
     length: usize,
     buffer_type: BufferType,
 }
@@ -1049,6 +1303,57 @@ struct NodePosition {
     start_offset: usize,
     remainder: usize,
     path: Vec<Rc<Node>>,
+}
+fn find_line_starts(content: &str, offset: usize, line_starts: &mut Vec<usize>) {
+    let mut i = 0;
+    while let Some(pos) = content[i..].find('\n') {
+        i += pos + 1;
+        line_starts.push(i + offset);
+    }
+}
+
+fn calculate_line_feed_count(
+    buffer: &str,
+    line_starts: &[usize],
+    start: BufferPosition,
+    end: BufferPosition,
+) -> usize {
+    if end.column == 0 {
+        return end.line - start.line;
+    }
+    if end.line == line_starts.len() - 1 {
+        return end.line - start.line;
+    }
+    let next_line_start_offset = line_starts[end.line + 1];
+    let end_offset = line_starts[end.line] + end.column;
+    if next_line_start_offset > end_offset + 1 {
+        return end.line - start.line;
+    }
+    let previous_char_offset = end_offset - 1;
+    if &buffer[previous_char_offset..previous_char_offset + 1] == "\n" {
+        end.line - start.line + 1
+    } else {
+        end.line - start.line
+    }
+}
+fn find_nearest_start_and_column_in_it(
+    line_starts: &[usize],
+    index: usize,
+    start_offset: usize,
+) -> BufferPosition {
+    let mut index = index + 1;
+    while index < line_starts.len() {
+        if line_starts[index] > start_offset {
+            let line = index - 1;
+            let column = start_offset - line_starts[line];
+            return BufferPosition { line, column };
+        } else {
+            index += 1;
+        }
+    }
+    let line = index - 1;
+    let column = start_offset - line_starts[line];
+    BufferPosition { line, column }
 }
 
 // ============================================================================
