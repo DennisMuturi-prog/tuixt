@@ -1,4 +1,5 @@
 pub mod piece_tree;
+pub mod app;
 
 #[cfg(test)]
 mod tests {

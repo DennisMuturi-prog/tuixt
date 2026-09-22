@@ -1,6 +1,7 @@
 use core::panic;
 use std::{cmp::min, rc::Rc};
 
+#[derive(Debug)]
 pub struct PieceTree {
     original: String,
     add: String,
@@ -10,6 +11,11 @@ pub struct PieceTree {
     black_leaf: Rc<Node>,
     double_black_leaf: Rc<Node>,
     last_change_in_buffer: usize,
+}
+impl Default for PieceTree{
+    fn default() -> Self {
+        Self::new("")
+    }
 }
 impl PieceTree {
     pub fn new(original_content: &str) -> Self {
