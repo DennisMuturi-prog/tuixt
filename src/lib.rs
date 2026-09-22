@@ -1210,5 +1210,316 @@ mod tests {
             }
         }
     }
+
+    // ============================ get_line_text ============================
+    //
+    // `get_line_text` copies the content of line `line_number` (0-indexed) into
+    // the caller's buffer, replacing whatever was there before.
+    //
+    // Specifications & Invariants:
+    // - Line numbers are 0-indexed (the first line is line 0).
+    // - The line text includes the trailing newline (`\n` or `\r\n`) if present in the buffer.
+    // - For an empty document `""`, line 0 yields `""`, and any line >= 1 is out of bounds (`""`).
+    // - Out-of-bounds line numbers clear `content` to an empty string `""` without panicking.
+    // - `content` is always cleared before writing, discarding any preexisting contents.
+
+    fn get_line_text(pt: &piece_tree::PieceTree, line_number: usize) -> String {
+        let mut content = String::new();
+        pt.get_line_text(line_number, &mut content);
+        content
+    }
+
+    fn split_lines_reference(s: &str) -> Vec<String> {
+        if s.is_empty() {
+            return vec![String::new()];
+        }
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for (i, b) in s.bytes().enumerate() {
+            if b == b'\n' {
+                lines.push(s[start..=i].to_string());
+                start = i + 1;
+            }
+        }
+        if start < s.len() {
+            lines.push(s[start..].to_string());
+        }
+        lines
+    }
+
+    #[test]
+    fn test_get_line_text_empty_document() {
+        let pt = piece_tree::PieceTree::new("");
+        assert_eq!("", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 50));
+    }
+
+    #[test]
+    fn test_get_line_text_single_line_without_newline() {
+        let pt = piece_tree::PieceTree::new("hello world");
+        assert_eq!("hello world", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 10));
+    }
+
+    #[test]
+    fn test_get_line_text_single_line_with_newline() {
+        let pt = piece_tree::PieceTree::new("hello world\n");
+        assert_eq!("hello world\n", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+    }
+
+    #[test]
+    fn test_get_line_text_multiline_with_trailing_newline() {
+        let pt = piece_tree::PieceTree::new("Line 0\nLine 1\nLine 2\n");
+        assert_eq!("Line 0\n", get_line_text(&pt, 0));
+        assert_eq!("Line 1\n", get_line_text(&pt, 1));
+        assert_eq!("Line 2\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_multiline_without_trailing_newline() {
+        let pt = piece_tree::PieceTree::new("First line\nSecond line\nThird line");
+        assert_eq!("First line\n", get_line_text(&pt, 0));
+        assert_eq!("Second line\n", get_line_text(&pt, 1));
+        assert_eq!("Third line", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_only_newlines() {
+        let pt_single = piece_tree::PieceTree::new("\n");
+        assert_eq!("\n", get_line_text(&pt_single, 0));
+        assert_eq!("", get_line_text(&pt_single, 1));
+
+        let pt_multi = piece_tree::PieceTree::new("\n\n\n");
+        assert_eq!("\n", get_line_text(&pt_multi, 0));
+        assert_eq!("\n", get_line_text(&pt_multi, 1));
+        assert_eq!("\n", get_line_text(&pt_multi, 2));
+        assert_eq!("", get_line_text(&pt_multi, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_consecutive_empty_lines() {
+        let pt = piece_tree::PieceTree::new("head\n\n\ntail\n");
+        assert_eq!("head\n", get_line_text(&pt, 0));
+        assert_eq!("\n", get_line_text(&pt, 1));
+        assert_eq!("\n", get_line_text(&pt, 2));
+        assert_eq!("tail\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+    }
+
+    #[test]
+    fn test_get_line_text_replaces_existing_buffer_content() {
+        let pt = piece_tree::PieceTree::new("hello\nworld\n");
+        let mut content = String::from("stale buffer content that must be replaced");
+        pt.get_line_text(1, &mut content);
+        assert_eq!("world\n", content);
+
+        // Out-of-bounds must clear the buffer
+        let mut out_of_bounds_content = String::from("stale content");
+        pt.get_line_text(99, &mut out_of_bounds_content);
+        assert_eq!("", out_of_bounds_content);
+    }
+
+    #[test]
+    fn test_get_line_text_large_out_of_bounds() {
+        let pt = piece_tree::PieceTree::new("single line");
+        assert_eq!("", get_line_text(&pt, usize::MAX));
+        assert_eq!("", get_line_text(&pt, 100_000));
+    }
+
+    #[test]
+    fn test_get_line_text_single_line_spanning_multiple_pieces() {
+        let mut pt = piece_tree::PieceTree::new("hello ");
+        pt.insert("brave ", 6);
+        pt.insert("new ", 12);
+        pt.insert("world\n", 16);
+        assert_eq!("hello brave new world\n", get_text(&pt));
+
+        assert_eq!("hello brave new world\n", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+    }
+
+    #[test]
+    fn test_get_line_text_piece_containing_multiple_lines() {
+        let mut pt = piece_tree::PieceTree::new("");
+        pt.insert("line 0\nline 1\nline 2\nline 3\nline 4\n", 0);
+
+        assert_eq!("line 0\n", get_line_text(&pt, 0));
+        assert_eq!("line 1\n", get_line_text(&pt, 1));
+        assert_eq!("line 2\n", get_line_text(&pt, 2));
+        assert_eq!("line 3\n", get_line_text(&pt, 3));
+        assert_eq!("line 4\n", get_line_text(&pt, 4));
+        assert_eq!("", get_line_text(&pt, 5));
+    }
+
+    #[test]
+    fn test_get_line_text_after_inserting_newline_splits_line() {
+        let mut pt = piece_tree::PieceTree::new("Hello World\n");
+        assert_eq!("Hello World\n", get_line_text(&pt, 0));
+
+        // Insert newline between "Hello" and " World" (at byte index 5)
+        pt.insert("\n", 5);
+        assert_eq!("Hello\n World\n", get_text(&pt));
+
+        assert_eq!("Hello\n", get_line_text(&pt, 0));
+        assert_eq!(" World\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_after_inserting_multiline_at_various_positions() {
+        let mut pt = piece_tree::PieceTree::new("middle line\n");
+
+        // Prepend multiline chunk at start (offset 0)
+        pt.insert("header 0\nheader 1\n", 0);
+        assert_eq!("header 0\n", get_line_text(&pt, 0));
+        assert_eq!("header 1\n", get_line_text(&pt, 1));
+        assert_eq!("middle line\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+
+        // Append multiline chunk at end
+        let end_pos = get_text(&pt).len();
+        pt.insert("footer\n", end_pos);
+        assert_eq!("header 0\n", get_line_text(&pt, 0));
+        assert_eq!("header 1\n", get_line_text(&pt, 1));
+        assert_eq!("middle line\n", get_line_text(&pt, 2));
+        assert_eq!("footer\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+    }
+
+    #[test]
+    fn test_get_line_text_after_deleting_newline_merges_lines() {
+        let mut pt = piece_tree::PieceTree::new("line 0\nline 1\n");
+        assert_eq!("line 0\n", get_line_text(&pt, 0));
+        assert_eq!("line 1\n", get_line_text(&pt, 1));
+
+        // Delete the '\n' between line 0 and line 1 (index 6, length 1)
+        pt.delete(6, 1);
+        assert_eq!("line 0line 1\n", get_text(&pt));
+
+        assert_eq!("line 0line 1\n", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+    }
+
+    #[test]
+    fn test_get_line_text_after_deleting_across_multiple_lines() {
+        let mut pt = piece_tree::PieceTree::new("alpha\nbeta\ngamma\ndelta\n");
+        // "alpha\n" = 6 bytes
+        // "beta\n"  = 5 bytes (6..11)
+        // "gamma\n" = 6 bytes (11..17)
+        // "delta\n" = 6 bytes (17..23)
+        // Delete from 't' in beta (offset 8) to 'l' in delta (offset 20, len 12)
+        // "alpha\nbe" + "ta\ngamma\ndel" (deleted) + "ta\n" -> "alpha\nbeta\n"
+        pt.delete(8, 12);
+        assert_eq!("alpha\nbeta\n", get_text(&pt));
+
+        assert_eq!("alpha\n", get_line_text(&pt, 0));
+        assert_eq!("beta\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_delete_all_resets_to_empty() {
+        let mut pt = piece_tree::PieceTree::new("alpha\nbeta\ngamma\n");
+        let len = get_text(&pt).len();
+        pt.delete(0, len);
+        assert_eq!("", get_text(&pt));
+
+        assert_eq!("", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+    }
+
+    #[test]
+    fn test_get_line_text_undo_and_redo() {
+        let mut pt = piece_tree::PieceTree::new("line 0\n");
+        pt.insert("line 1\n", 7);
+        assert_eq!("line 0\n", get_line_text(&pt, 0));
+        assert_eq!("line 1\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+
+        pt.undo();
+        assert_eq!("line 0\n", get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+
+        pt.redo();
+        assert_eq!("line 0\n", get_line_text(&pt, 0));
+        assert_eq!("line 1\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_unicode_multibyte_characters() {
+        let pt = piece_tree::PieceTree::new("🦀 Rustacean\n🎉 Celebrate\n✨ Magic\n");
+        assert_eq!("🦀 Rustacean\n", get_line_text(&pt, 0));
+        assert_eq!("🎉 Celebrate\n", get_line_text(&pt, 1));
+        assert_eq!("✨ Magic\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_crlf_newlines() {
+        let pt = piece_tree::PieceTree::new("first\r\nsecond\r\nthird");
+        assert_eq!("first\r\n", get_line_text(&pt, 0));
+        assert_eq!("second\r\n", get_line_text(&pt, 1));
+        assert_eq!("third", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_fuzz_matches_reference_lines() {
+        let mut pt = piece_tree::PieceTree::new("the quick\nbrown fox\njumps over\n");
+        let mut reference = String::from("the quick\nbrown fox\njumps over\n");
+
+        let mut rng = Lcg(0xFEED_FACE_CAFE_BABE);
+
+        for step in 0..500 {
+            let ref_lines = split_lines_reference(&reference);
+
+            // Verify all existing lines match the reference model
+            for (line_idx, expected_line) in ref_lines.iter().enumerate() {
+                assert_eq!(
+                    *expected_line,
+                    get_line_text(&pt, line_idx),
+                    "step {}: line {} mismatch\nDocument:\n{:?}",
+                    step,
+                    line_idx,
+                    reference
+                );
+            }
+
+            // Verify out-of-bounds line queries yield empty strings
+            assert_eq!("", get_line_text(&pt, ref_lines.len()));
+            assert_eq!("", get_line_text(&pt, ref_lines.len() + 1));
+            assert_eq!("", get_line_text(&pt, ref_lines.len() + 10));
+
+            // Mutate document with mix of plain text and newlines
+            let op = rng.next() % 100;
+            if op < 50 || reference.is_empty() {
+                let snippets = [
+                    "hello\n",
+                    "\n",
+                    "world",
+                    "\n\n",
+                    "foo\nbar\n",
+                    "baz",
+                    "line\r\n",
+                ];
+                let snippet = snippets[rng.below(snippets.len())];
+                let pos = rng.below(reference.len() + 1);
+                pt.insert(snippet, pos);
+                reference.insert_str(pos, snippet);
+            } else {
+                let pos = rng.below(reference.len());
+                let del = 1 + rng.below(reference.len() - pos);
+                pt.delete(pos, del);
+                reference.replace_range(pos..pos + del, "");
+            }
+        }
+    }
 }
+
 

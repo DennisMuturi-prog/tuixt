@@ -28,7 +28,7 @@ impl PieceTree {
                 root: None,
                 undo_stack: Vec::new(),
                 redo_stack: Vec::new(),
-                original_line_starts: vec![0],
+                original_line_starts: Vec::new(),
                 add_line_starts: vec![0],
                 double_black_leaf: Rc::new(Node::new_double_black_leaf()),
                 black_leaf: Rc::new(Node::new_black_leaf()),
@@ -83,6 +83,9 @@ impl PieceTree {
             content.clear();
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
+    }
+    pub fn get_line_text(&self,line_number:usize,content:&mut String){
+
     }
     fn get_sub_text_helper(
         &self,
@@ -525,6 +528,7 @@ impl PieceTree {
             buffer_type: node.buffer_type,
         }
     }
+
     pub fn delete(&mut self, offset: usize, length: usize) {
         if length == 0 {
             return;
