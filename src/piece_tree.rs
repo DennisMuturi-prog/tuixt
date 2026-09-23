@@ -1472,7 +1472,7 @@ fn calculate_line_feed_count(
         return end.line - start.line;
     }
     let previous_char_offset = end_offset - 1;
-    if &buffer[previous_char_offset..previous_char_offset + 1] == "\n" {
+    if buffer.as_bytes()[previous_char_offset] == b'\n' {
         end.line - start.line + 1
     } else {
         end.line - start.line

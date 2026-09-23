@@ -1520,6 +1520,566 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_get_line_text_exact_line_count_and_boundaries() {
+        // Document with no newline (1 line: line 0)
+        let pt0 = piece_tree::PieceTree::new("only line");
+        assert_eq!("only line", get_line_text(&pt0, 0));
+        assert_eq!("", get_line_text(&pt0, 1));
+        assert_eq!("", get_line_text(&pt0, 2));
+        assert_eq!("", get_line_text(&pt0, usize::MAX));
+        assert_eq!("", get_line_text(&pt0, usize::MAX - 1));
+
+        // Document with single newline (1 line: line 0)
+        let pt1 = piece_tree::PieceTree::new("only line\n");
+        assert_eq!("only line\n", get_line_text(&pt1, 0));
+        assert_eq!("", get_line_text(&pt1, 1));
+        assert_eq!("", get_line_text(&pt1, 2));
+        assert_eq!("", get_line_text(&pt1, usize::MAX));
+
+        // Document with two lines without trailing newline (2 lines: 0, 1)
+        let pt2 = piece_tree::PieceTree::new("line 0\nline 1");
+        assert_eq!("line 0\n", get_line_text(&pt2, 0));
+        assert_eq!("line 1", get_line_text(&pt2, 1));
+        assert_eq!("", get_line_text(&pt2, 2));
+        assert_eq!("", get_line_text(&pt2, 3));
+        assert_eq!("", get_line_text(&pt2, usize::MAX));
+
+        // Document with two lines with trailing newline (2 lines: 0, 1)
+        let pt3 = piece_tree::PieceTree::new("line 0\nline 1\n");
+        assert_eq!("line 0\n", get_line_text(&pt3, 0));
+        assert_eq!("line 1\n", get_line_text(&pt3, 1));
+        assert_eq!("", get_line_text(&pt3, 2));
+        assert_eq!("", get_line_text(&pt3, 100));
+    }
+
+    #[test]
+    fn test_get_line_text_buffer_reuse_alternating_valid_and_out_of_bounds() {
+        let pt = piece_tree::PieceTree::new("first\nsecond\nthird");
+        let mut buf = String::from("initial dirty content that is quite lengthy");
+
+        // Valid query line 0
+        pt.get_line_text(0, &mut buf);
+        assert_eq!("first\n", buf);
+
+        // Put dirty content again
+        buf.push_str("extra dirty garbage");
+
+        // Out-of-bounds query line 3 -> must clear to empty
+        pt.get_line_text(3, &mut buf);
+        assert_eq!("", buf);
+
+        // Valid query line 1
+        pt.get_line_text(1, &mut buf);
+        assert_eq!("second\n", buf);
+
+        // Out-of-bounds query usize::MAX -> must clear to empty
+        pt.get_line_text(usize::MAX, &mut buf);
+        assert_eq!("", buf);
+
+        // Valid query line 2 (last line without newline)
+        pt.get_line_text(2, &mut buf);
+        assert_eq!("third", buf);
+
+        // Out-of-bounds query 500
+        pt.get_line_text(500, &mut buf);
+        assert_eq!("", buf);
+    }
+
+    #[test]
+    fn test_get_line_text_leading_newlines() {
+        // Single leading newline followed by text
+        let pt1 = piece_tree::PieceTree::new("\nhello\n");
+        assert_eq!("\n", get_line_text(&pt1, 0));
+        assert_eq!("hello\n", get_line_text(&pt1, 1));
+        assert_eq!("", get_line_text(&pt1, 2));
+
+        // Two leading newlines with text without trailing newline
+        let pt2 = piece_tree::PieceTree::new("\n\nworld");
+        assert_eq!("\n", get_line_text(&pt2, 0));
+        assert_eq!("\n", get_line_text(&pt2, 1));
+        assert_eq!("world", get_line_text(&pt2, 2));
+        assert_eq!("", get_line_text(&pt2, 3));
+
+        // Leading CRLFs
+        let pt3 = piece_tree::PieceTree::new("\r\n\r\nfoo\r\n");
+        assert_eq!("\r\n", get_line_text(&pt3, 0));
+        assert_eq!("\r\n", get_line_text(&pt3, 1));
+        assert_eq!("foo\r\n", get_line_text(&pt3, 2));
+        assert_eq!("", get_line_text(&pt3, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_trailing_consecutive_newlines() {
+        let pt = piece_tree::PieceTree::new("content\n\n\n");
+        assert_eq!("content\n", get_line_text(&pt, 0));
+        assert_eq!("\n", get_line_text(&pt, 1));
+        assert_eq!("\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+        assert_eq!("", get_line_text(&pt, 100));
+    }
+
+    #[test]
+    fn test_get_line_text_crlf_split_across_pieces() {
+        // Piece 1 ends with '\r', Piece 2 starts with '\n'
+        let mut pt = piece_tree::PieceTree::new("line 0\r");
+        pt.insert("\nline 1\r\n", 7);
+        assert_eq!("line 0\r\nline 1\r\n", get_text(&pt));
+
+        assert_eq!("line 0\r\n", get_line_text(&pt, 0));
+        assert_eq!("line 1\r\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+
+        // Insert between \r and \n: breaks the CRLF into separate text
+        let mut pt2 = piece_tree::PieceTree::new("hello\r\nworld\n");
+        // offset 6 is between '\r' (offset 5) and '\n' (offset 6)
+        pt2.insert("MIDDLE", 6);
+        assert_eq!("hello\rMIDDLE\nworld\n", get_text(&pt2));
+        assert_eq!("hello\rMIDDLE\n", get_line_text(&pt2, 0));
+        assert_eq!("world\n", get_line_text(&pt2, 1));
+        assert_eq!("", get_line_text(&pt2, 2));
+
+        // Delete \r from \r\n
+        let mut pt3 = piece_tree::PieceTree::new("hello\r\nworld\n");
+        pt3.delete(5, 1); // delete '\r'
+        assert_eq!("hello\nworld\n", get_text(&pt3));
+        assert_eq!("hello\n", get_line_text(&pt3, 0));
+        assert_eq!("world\n", get_line_text(&pt3, 1));
+        assert_eq!("", get_line_text(&pt3, 2));
+
+        // Delete \n from \r\n (merges line with following line)
+        let mut pt4 = piece_tree::PieceTree::new("hello\r\nworld\n");
+        pt4.delete(6, 1); // delete '\n'
+        assert_eq!("hello\rworld\n", get_text(&pt4));
+        assert_eq!("hello\rworld\n", get_line_text(&pt4, 0));
+        assert_eq!("", get_line_text(&pt4, 1));
+
+        // Mixed line endings in one document
+        let pt5 = piece_tree::PieceTree::new("line 0\r\nline 1\nline 2\r\nline 3");
+        assert_eq!("line 0\r\n", get_line_text(&pt5, 0));
+        assert_eq!("line 1\n", get_line_text(&pt5, 1));
+        assert_eq!("line 2\r\n", get_line_text(&pt5, 2));
+        assert_eq!("line 3", get_line_text(&pt5, 3));
+        assert_eq!("", get_line_text(&pt5, 4));
+    }
+
+    #[test]
+    fn test_get_line_text_many_pieces_single_line() {
+        let mut pt = piece_tree::PieceTree::new("");
+        let mut expected = String::new();
+
+        // Insert 50 pieces without any newlines
+        for i in 0..50 {
+            let frag = format!("f{}_", i);
+            let pos = expected.len();
+            pt.insert(&frag, pos);
+            expected.push_str(&frag);
+            assert_eq!(expected, get_line_text(&pt, 0));
+            assert_eq!("", get_line_text(&pt, 1));
+        }
+
+        // Insert newline at the end
+        let end_pos = expected.len();
+        pt.insert("\n", end_pos);
+        expected.push('\n');
+        assert_eq!(expected, get_line_text(&pt, 0));
+        assert_eq!("", get_line_text(&pt, 1));
+
+        // Insert newline in the middle (at character 50)
+        pt.insert("\n", 50);
+        expected.insert(50, '\n');
+        let ref_lines = split_lines_reference(&expected);
+        assert_eq!(ref_lines[0], get_line_text(&pt, 0));
+        assert_eq!(ref_lines[1], get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_interleaved_pieces_across_lines() {
+        let mut pt = piece_tree::PieceTree::new("aaa");
+        pt.insert("bbb\n", 3);
+        pt.insert("ccc", 7);
+        pt.insert("ddd", 10);
+        pt.insert("\neee", 13);
+        pt.insert("fff\n", 17);
+        assert_eq!("aaabbb\ncccddd\neeefff\n", get_text(&pt));
+
+        assert_eq!("aaabbb\n", get_line_text(&pt, 0));
+        assert_eq!("cccddd\n", get_line_text(&pt, 1));
+        assert_eq!("eeefff\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+    }
+
+    #[test]
+    fn test_get_line_text_insert_at_exact_line_boundaries() {
+        let mut pt = piece_tree::PieceTree::new("line0\nline1\nline2\n");
+
+        // 1. Insert at offset 0 (start of document / start of line 0)
+        pt.insert("prefix_", 0);
+        assert_eq!("prefix_line0\n", get_line_text(&pt, 0));
+        assert_eq!("line1\n", get_line_text(&pt, 1));
+        assert_eq!("line2\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+
+        // 2. Insert right before '\n' in line 0 (offset 12)
+        pt.insert("_suffix", 12);
+        assert_eq!("prefix_line0_suffix\n", get_line_text(&pt, 0));
+        assert_eq!("line1\n", get_line_text(&pt, 1));
+        assert_eq!("line2\n", get_line_text(&pt, 2));
+
+        // 3. Insert right after '\n' in line 0 (offset 20, start of line 1)
+        pt.insert("NEW_", 20);
+        assert_eq!("prefix_line0_suffix\n", get_line_text(&pt, 0));
+        assert_eq!("NEW_line1\n", get_line_text(&pt, 1));
+        assert_eq!("line2\n", get_line_text(&pt, 2));
+
+        // 4. Insert at the end of the document (after line 2's '\n')
+        let doc_len = get_text(&pt).len();
+        pt.insert("line3_appended\n", doc_len);
+        assert_eq!("prefix_line0_suffix\n", get_line_text(&pt, 0));
+        assert_eq!("NEW_line1\n", get_line_text(&pt, 1));
+        assert_eq!("line2\n", get_line_text(&pt, 2));
+        assert_eq!("line3_appended\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+
+        // 5. Insert '\n' right before an existing '\n' (creates an empty line)
+        pt.insert("\n", 19);
+        assert_eq!("prefix_line0_suffix\n", get_line_text(&pt, 0));
+        assert_eq!("\n", get_line_text(&pt, 1));
+        assert_eq!("NEW_line1\n", get_line_text(&pt, 2));
+        assert_eq!("line2\n", get_line_text(&pt, 3));
+        assert_eq!("line3_appended\n", get_line_text(&pt, 4));
+        assert_eq!("", get_line_text(&pt, 5));
+    }
+
+    #[test]
+    fn test_get_line_text_delete_at_exact_line_boundaries() {
+        let mut pt = piece_tree::PieceTree::new("line 0\nline 1\nline 2\nline 3\n");
+
+        // 1. Delete char right before '\n' of line 0 ('0' at offset 5)
+        pt.delete(5, 1);
+        assert_eq!("line \n", get_line_text(&pt, 0));
+        assert_eq!("line 1\n", get_line_text(&pt, 1));
+
+        // 2. Delete the '\n' between line 0 and line 1 (offset 5) -> merges line 0 and line 1
+        pt.delete(5, 1);
+        assert_eq!("line line 1\n", get_line_text(&pt, 0));
+        assert_eq!("line 2\n", get_line_text(&pt, 1));
+        assert_eq!("line 3\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+
+        // 3. Delete entire line 1 ("line 2\n", len 7 at offset 12)
+        pt.delete(12, 7);
+        assert_eq!("line line 1\n", get_line_text(&pt, 0));
+        assert_eq!("line 3\n", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+
+        // 4. Delete trailing newline of last line (offset 18, len 1)
+        pt.delete(18, 1);
+        assert_eq!("line line 1\n", get_line_text(&pt, 0));
+        assert_eq!("line 3", get_line_text(&pt, 1));
+        assert_eq!("", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_empty_lines_in_middle_and_edges() {
+        let pt = piece_tree::PieceTree::new("\n\na\n\n\nb\n\n");
+        assert_eq!("\n", get_line_text(&pt, 0));
+        assert_eq!("\n", get_line_text(&pt, 1));
+        assert_eq!("a\n", get_line_text(&pt, 2));
+        assert_eq!("\n", get_line_text(&pt, 3));
+        assert_eq!("\n", get_line_text(&pt, 4));
+        assert_eq!("b\n", get_line_text(&pt, 5));
+        assert_eq!("\n", get_line_text(&pt, 6));
+        assert_eq!("", get_line_text(&pt, 7));
+        assert_eq!("", get_line_text(&pt, 8));
+        assert_eq!("", get_line_text(&pt, 9));
+        assert_eq!("", get_line_text(&pt, 10));
+    }
+
+    #[test]
+    fn test_get_line_text_deep_tree_many_lines() {
+        let mut pt = piece_tree::PieceTree::new("");
+        let mut reference = String::new();
+
+        // 1. Insert 400 lines sequentially at the end
+        for i in 0..400 {
+            let line = format!("line {:04}\n", i);
+            let pos = reference.len();
+            pt.insert(&line, pos);
+            reference.push_str(&line);
+        }
+
+        // 2. Insert 100 lines at offset 0 (left-heavy rotations)
+        for i in 0..100 {
+            let line = format!("prepended {:03}\n", i);
+            pt.insert(&line, 0);
+            reference.insert_str(0, &line);
+        }
+
+        // 3. Insert 100 lines in the middle
+        for i in 0..100 {
+            let line = format!("middle {:03}\n", i);
+            let mid_pos = reference.len() / 2;
+            pt.insert(&line, mid_pos);
+            reference.insert_str(mid_pos, &line);
+        }
+
+        let ref_lines = split_lines_reference(&reference);
+        assert_eq!(600, ref_lines.len());
+
+        // Verify every line in the 600-line deep tree
+        for (i, expected) in ref_lines.iter().enumerate() {
+            assert_eq!(
+                *expected,
+                get_line_text(&pt, i),
+                "mismatch at line {}",
+                i
+            );
+        }
+
+        // Out-of-bounds queries on deep tree
+        assert_eq!("", get_line_text(&pt, 600));
+        assert_eq!("", get_line_text(&pt, 601));
+        assert_eq!("", get_line_text(&pt, 1000));
+        assert_eq!("", get_line_text(&pt, usize::MAX));
+    }
+
+    #[test]
+    fn test_get_line_text_simulated_typing_and_backspacing() {
+        let mut pt = piece_tree::PieceTree::new("");
+        let mut text = String::new();
+
+        let script = "hello\nworld\nfoo\nbar\n";
+        for ch in script.chars() {
+            let mut s = String::new();
+            s.push(ch);
+            let pos = text.len();
+            pt.insert(&s, pos);
+            text.push(ch);
+
+            let ref_lines = split_lines_reference(&text);
+            for (idx, exp) in ref_lines.iter().enumerate() {
+                assert_eq!(*exp, get_line_text(&pt, idx));
+            }
+            assert_eq!("", get_line_text(&pt, ref_lines.len()));
+        }
+
+        // Backspace 10 characters one by one (covers deleting \n, characters, etc.)
+        for _ in 0..10 {
+            let pos = text.len() - 1;
+            pt.delete(pos, 1);
+            text.remove(pos);
+
+            let ref_lines = split_lines_reference(&text);
+            for (idx, exp) in ref_lines.iter().enumerate() {
+                assert_eq!(*exp, get_line_text(&pt, idx));
+            }
+            assert_eq!("", get_line_text(&pt, ref_lines.len()));
+        }
+    }
+
+    #[test]
+    fn test_get_line_text_undo_redo_complex_line_operations() {
+        let mut pt = piece_tree::PieceTree::new("line A\nline B\nline C\n");
+        let mut history: Vec<Vec<String>> = Vec::new();
+
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Op 1: Prepend multiline
+        pt.insert("header 1\nheader 2\n", 0);
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Op 2: Insert into line B
+        let text_now = get_text(&pt);
+        let b_pos = text_now.find("line B").unwrap();
+        pt.insert("MODIFIED_", b_pos);
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Op 3: Delete across lines (delete from middle of line A across newline into MODIFIED_line B)
+        let text_now = get_text(&pt);
+        let a_pos = text_now.find("line A").unwrap() + 4; // after "line"
+        pt.delete(a_pos, 15);
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Op 4: Append multiline
+        let end = get_text(&pt).len();
+        pt.insert("footer 1\nfooter 2", end);
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Op 5: Delete everything
+        let all_len = get_text(&pt).len();
+        pt.delete(0, all_len);
+        history.push(split_lines_reference(&get_text(&pt)));
+
+        // Walk backwards with undo, checking all lines at every state
+        for expected_lines in history.iter().rev() {
+            for (line_idx, expected_line) in expected_lines.iter().enumerate() {
+                assert_eq!(*expected_line, get_line_text(&pt, line_idx));
+            }
+            assert_eq!("", get_line_text(&pt, expected_lines.len()));
+            pt.undo();
+        }
+
+        // Walk forward with redo, checking all lines at every state
+        for expected_lines in history.iter().skip(1) {
+            pt.redo();
+            for (line_idx, expected_line) in expected_lines.iter().enumerate() {
+                assert_eq!(*expected_line, get_line_text(&pt, line_idx));
+            }
+            assert_eq!("", get_line_text(&pt, expected_lines.len()));
+        }
+    }
+
+    #[test]
+    fn test_get_line_text_whitespace_and_tabs() {
+        let pt = piece_tree::PieceTree::new("   \n\t\t\t\n \t \t \n\r\r\n");
+        assert_eq!("   \n", get_line_text(&pt, 0));
+        assert_eq!("\t\t\t\n", get_line_text(&pt, 1));
+        assert_eq!(" \t \t \n", get_line_text(&pt, 2));
+        assert_eq!("\r\r\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+    }
+
+    #[test]
+    fn test_get_line_text_unicode_edits_and_line_splits() {
+        let mut pt = piece_tree::PieceTree::new("日本語\n한국어\n中文\n");
+        assert_eq!("日本語\n", get_line_text(&pt, 0));
+        assert_eq!("한국어\n", get_line_text(&pt, 1));
+        assert_eq!("中文\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+
+        // Insert emoji in line 1 ("한국어\n" -> "한국✨어\n")
+        pt.insert("✨", 16);
+        assert_eq!("日本語\n", get_line_text(&pt, 0));
+        assert_eq!("한국✨어\n", get_line_text(&pt, 1));
+        assert_eq!("中文\n", get_line_text(&pt, 2));
+        assert_eq!("", get_line_text(&pt, 3));
+
+        // Split line 0 with a newline: "日\n本語\n"
+        pt.insert("\n", 3);
+        assert_eq!("日\n", get_line_text(&pt, 0));
+        assert_eq!("本語\n", get_line_text(&pt, 1));
+        assert_eq!("한국✨어\n", get_line_text(&pt, 2));
+        assert_eq!("中文\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+
+        // Delete "語" (3 bytes at offset 7)
+        pt.delete(7, 3);
+        assert_eq!("日\n", get_line_text(&pt, 0));
+        assert_eq!("本\n", get_line_text(&pt, 1));
+        assert_eq!("한국✨어\n", get_line_text(&pt, 2));
+        assert_eq!("中文\n", get_line_text(&pt, 3));
+        assert_eq!("", get_line_text(&pt, 4));
+    }
+
+    #[test]
+    fn test_get_line_text_repeated_sequential_edits_on_same_line() {
+        let mut pt = piece_tree::PieceTree::new("header\ntarget\nfooter\n");
+
+        // Mutate only line 1 multiple times
+        pt.insert("_1", 13);
+        assert_eq!("header\n", get_line_text(&pt, 0));
+        assert_eq!("target_1\n", get_line_text(&pt, 1));
+        assert_eq!("footer\n", get_line_text(&pt, 2));
+
+        pt.insert("_2", 15);
+        assert_eq!("header\n", get_line_text(&pt, 0));
+        assert_eq!("target_1_2\n", get_line_text(&pt, 1));
+        assert_eq!("footer\n", get_line_text(&pt, 2));
+
+        pt.delete(13, 2);
+        assert_eq!("header\n", get_line_text(&pt, 0));
+        assert_eq!("target_2\n", get_line_text(&pt, 1));
+        assert_eq!("footer\n", get_line_text(&pt, 2));
+    }
+
+    #[test]
+    fn test_get_line_text_differential_fuzz_multi_seed() {
+        let seeds: [u64; 5] = [
+            0x1234_5678_9ABC_DEF0,
+            0xDEAD_BEEF_0123_4567,
+            0xCAFE_BABE_89AB_CDEF,
+            0x0FED_CBA9_8765_4321,
+            0xAAAA_5555_AAAA_5555,
+        ];
+
+        for seed in seeds {
+            let mut pt = piece_tree::PieceTree::new("");
+            let mut reference = String::new();
+            let mut rng = Lcg(seed);
+
+            for step in 0..250 {
+                let op = rng.next() % 100;
+                if op < 55 || reference.is_empty() {
+                    let snippets = [
+                        "a",
+                        "\n",
+                        "line\n",
+                        "\n\n",
+                        "hello world",
+                        "split\r\nline",
+                        "🦀",
+                        "foo\nbar\nbaz\n",
+                    ];
+                    let snippet = snippets[rng.below(snippets.len())];
+                    // Pick a valid char boundary for insertion
+                    let char_indices: Vec<usize> =
+                        reference.char_indices().map(|(idx, _)| idx).collect();
+                    let pos = if char_indices.is_empty() || rng.below(2) == 0 {
+                        reference.len()
+                    } else {
+                        char_indices[rng.below(char_indices.len())]
+                    };
+                    pt.insert(snippet, pos);
+                    reference.insert_str(pos, snippet);
+                } else if op < 85 {
+                    let char_indices: Vec<usize> =
+                        reference.char_indices().map(|(idx, _)| idx).collect();
+                    if !char_indices.is_empty() {
+                        let start_idx = rng.below(char_indices.len());
+                        let pos = char_indices[start_idx];
+                        let end_idx =
+                            start_idx + 1 + rng.below(char_indices.len() - start_idx);
+                        let end_pos = if end_idx < char_indices.len() {
+                            char_indices[end_idx]
+                        } else {
+                            reference.len()
+                        };
+                        let del = end_pos - pos;
+                        pt.delete(pos, del);
+                        reference.replace_range(pos..end_pos, "");
+                    }
+                } else if op < 93 {
+                    pt.undo();
+                    reference = get_text(&pt);
+                } else {
+                    pt.redo();
+                    reference = get_text(&pt);
+                }
+
+                let ref_lines = split_lines_reference(&reference);
+                for (line_idx, expected_line) in ref_lines.iter().enumerate() {
+                    assert_eq!(
+                        *expected_line,
+                        get_line_text(&pt, line_idx),
+                        "seed {:#x}, step {}: mismatch at line {}\nDocument:\n{:?}",
+                        seed,
+                        step,
+                        line_idx,
+                        reference
+                    );
+                }
+
+                // Verify exact boundary and out of bounds
+                assert_eq!("", get_line_text(&pt, ref_lines.len()));
+                assert_eq!("", get_line_text(&pt, ref_lines.len() + 1));
+                assert_eq!("", get_line_text(&pt, ref_lines.len() + 20));
+            }
+        }
+    }
 }
 
 
