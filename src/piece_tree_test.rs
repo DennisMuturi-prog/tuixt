@@ -2113,4 +2113,220 @@ mod tests {
             }
         }
     }
+
+    // ============================================================
+    // get_lines_text — additional edge-case / bug-catching tests
+    // ============================================================
+
+    #[test]
+    fn get_lines_text_does_not_corrupt_existing_buffer_content() {
+        // The signature takes `content: &mut String`.
+        // The fetched lines must appear in the buffer; a buggy impl that calls
+        // `content.clear()` before writing would lose pre-existing data — the
+        // fetched portion must still be present and correct regardless.
+        let tree = PieceTree::new("one\ntwo\nthree");
+        let mut buf = String::new();
+        tree.get_lines_text(0, 2, &mut buf);
+        // The result must contain the first two lines.
+        assert!(
+            buf.contains("one\n") && buf.contains("two\n"),
+            "Expected fetched lines present in buffer, got: {:?}",
+            buf
+        );
+    }
+
+    #[test]
+    fn get_lines_text_start_line_one_past_last_line_returns_empty() {
+        // A document with N logical lines has valid indices 0..N-1.
+        // Requesting exactly index N must return empty (boundary check).
+        let tree = PieceTree::new("only line");
+        // Line count == 1, so start_line == 1 is out of range.
+        assert_eq!(lines_text(&tree, 1, 1), "");
+        assert_eq!(lines_text(&tree, 1, 10), "");
+    }
+
+    #[test]
+    fn get_lines_text_single_newline_doc() {
+        // A document that is just "\n" has two logical lines: "\n" (line 0) and "" (line 1).
+        let tree = PieceTree::new("\n");
+
+        assert_eq!(lines_text(&tree, 0, 1), "\n");
+        assert_eq!(lines_text(&tree, 1, 1), "");
+        assert_eq!(lines_text(&tree, 0, 2), "\n");
+        assert_eq!(lines_text(&tree, 2, 1), ""); // fully out of range
+    }
+
+    #[test]
+    fn get_lines_text_doc_of_only_newlines() {
+        // Document: "\n\n\n" — four logical lines.
+        let tree = PieceTree::new("\n\n\n");
+
+        assert_eq!(lines_text(&tree, 0, 1), "\n");
+        assert_eq!(lines_text(&tree, 1, 1), "\n");
+        assert_eq!(lines_text(&tree, 2, 1), "\n");
+        assert_eq!(lines_text(&tree, 3, 1), ""); // trailing empty line
+        assert_eq!(lines_text(&tree, 0, 4), "\n\n\n");
+        assert_eq!(lines_text(&tree, 1, 3), "\n\n");
+    }
+
+    #[test]
+    fn get_lines_text_large_num_of_lines_saturates_at_doc_end() {
+        // Passing usize::MAX should not panic — it must clamp to what is available.
+        let tree = PieceTree::new("line0\nline1\nline2");
+        let result = lines_text(&tree, 0, usize::MAX);
+        assert_eq!(result, "line0\nline1\nline2");
+    }
+
+    #[test]
+    fn get_lines_text_mixed_crlf_and_lf_line_endings() {
+        // Some lines end with \r\n, others with \n — all must be returned verbatim.
+        let tree = PieceTree::new("alpha\r\nbeta\ngamma\r\n");
+
+        assert_eq!(lines_text(&tree, 0, 1), "alpha\r\n");
+        assert_eq!(lines_text(&tree, 1, 1), "beta\n");
+        assert_eq!(lines_text(&tree, 2, 1), "gamma\r\n");
+        assert_eq!(lines_text(&tree, 0, 3), "alpha\r\nbeta\ngamma\r\n");
+        assert_eq!(lines_text(&tree, 1, 2), "beta\ngamma\r\n");
+    }
+
+    #[test]
+    fn get_lines_text_after_insert_at_start() {
+        // Inserting before all existing content and then querying lines.
+        let mut tree = PieceTree::new("world");
+        tree.insert("hello\n", 0);
+        // Document: "hello\nworld"
+        assert_eq!(text(&tree), "hello\nworld");
+
+        assert_eq!(lines_text(&tree, 0, 1), "hello\n");
+        assert_eq!(lines_text(&tree, 1, 1), "world");
+        assert_eq!(lines_text(&tree, 0, 2), "hello\nworld");
+    }
+
+    #[test]
+    fn get_lines_text_after_insert_at_end() {
+        // Appending content at the end of the document.
+        let mut tree = PieceTree::new("hello");
+        tree.insert("\nworld", 5);
+        // Document: "hello\nworld"
+        assert_eq!(text(&tree), "hello\nworld");
+
+        assert_eq!(lines_text(&tree, 0, 1), "hello\n");
+        assert_eq!(lines_text(&tree, 1, 1), "world");
+        assert_eq!(lines_text(&tree, 0, 2), "hello\nworld");
+    }
+
+    #[test]
+    fn get_lines_text_after_delete_last_newline_reduces_line_count() {
+        // Removing the trailing newline should reduce the visible line count.
+        let mut tree = PieceTree::new("one\ntwo\n");
+        // Delete the very last '\n' (byte index 7).
+        tree.delete(7, 1);
+        // Document is now "one\ntwo"
+        assert_eq!(text(&tree), "one\ntwo");
+
+        assert_eq!(lines_text(&tree, 0, 1), "one\n");
+        assert_eq!(lines_text(&tree, 1, 1), "two");
+        assert_eq!(lines_text(&tree, 0, 2), "one\ntwo");
+        // There is no longer a third line.
+        assert_eq!(lines_text(&tree, 2, 1), "");
+    }
+
+    #[test]
+    fn get_lines_text_start_beyond_single_line_doc_returns_empty() {
+        // Ensure out-of-range is handled for single-line documents too.
+        let tree = PieceTree::new("only");
+
+        assert_eq!(lines_text(&tree, 1, 1), "");
+        assert_eq!(lines_text(&tree, 5, 5), "");
+    }
+
+    #[test]
+    fn get_lines_text_many_small_insertions_across_pieces() {
+        // Build a document via many insertions so the piece tree has many nodes,
+        // then verify get_lines_text spans across multiple piece boundaries.
+        let mut tree = PieceTree::new("");
+        let words = ["alpha", "beta", "gamma", "delta", "epsilon"];
+        let mut offset = 0usize;
+        for word in &words {
+            tree.insert(&format!("{}\n", word), offset);
+            offset += word.len() + 1; // +1 for '\n'
+        }
+        assert_eq!(text(&tree), "alpha\nbeta\ngamma\ndelta\nepsilon\n");
+
+        assert_eq!(lines_text(&tree, 0, 1), "alpha\n");
+        assert_eq!(lines_text(&tree, 2, 2), "gamma\ndelta\n");
+        assert_eq!(lines_text(&tree, 0, 5), "alpha\nbeta\ngamma\ndelta\nepsilon\n");
+        assert_eq!(lines_text(&tree, 4, 1), "epsilon\n");
+        assert_eq!(lines_text(&tree, 5, 1), "");
+    }
+
+    #[test]
+    fn get_lines_text_replace_line_via_delete_and_insert() {
+        // Simulate replacing the content of line 1 by deleting it and inserting new text.
+        let mut tree = PieceTree::new("foo\nbar\nbaz");
+        // "bar" starts at byte offset 4, length 3.
+        tree.delete(4, 3);
+        tree.insert("REPLACED", 4);
+        // Document: "foo\nREPLACED\nbaz"
+        assert_eq!(text(&tree), "foo\nREPLACED\nbaz");
+
+        assert_eq!(lines_text(&tree, 0, 1), "foo\n");
+        assert_eq!(lines_text(&tree, 1, 1), "REPLACED\n");
+        assert_eq!(lines_text(&tree, 2, 1), "baz");
+        assert_eq!(lines_text(&tree, 0, 3), "foo\nREPLACED\nbaz");
+    }
+
+    #[test]
+    fn get_lines_text_num_of_lines_exactly_one_past_end() {
+        // Requesting exactly one more line than available should return all available lines.
+        let tree = PieceTree::new("a\nb\nc");
+        // 3 lines total; requesting 4 from line 0 should give all three.
+        assert_eq!(lines_text(&tree, 0, 4), "a\nb\nc");
+    }
+
+    #[test]
+    fn get_lines_text_line_containing_only_spaces() {
+        // Lines that are non-empty but contain only whitespace must be returned as-is.
+        let tree = PieceTree::new("line0\n   \nline2");
+
+        assert_eq!(lines_text(&tree, 1, 1), "   \n");
+        assert_eq!(lines_text(&tree, 0, 2), "line0\n   \n");
+        assert_eq!(lines_text(&tree, 0, 3), "line0\n   \nline2");
+    }
+
+    #[test]
+    fn get_lines_text_very_long_single_line() {
+        // A very long single line (no newlines) — any start_line > 0 must return empty.
+        let long = "x".repeat(10_000);
+        let tree = PieceTree::new(&long);
+
+        assert_eq!(lines_text(&tree, 0, 1), long);
+        assert_eq!(lines_text(&tree, 1, 1), "");
+    }
+
+    #[test]
+    fn get_lines_text_consistent_with_get_line_text_after_mutations() {
+        // Cross-check: after mutations, get_lines_text must agree with individual
+        // get_line_text calls for every (start, n) combination.
+        let mut tree = PieceTree::new("aaa\nbbb\nccc\nddd\neee");
+
+        // Delete middle newline to merge lines 1 and 2.
+        tree.delete(7, 1); // removes '\n' between "bbb" and "ccc"
+        // Document: "aaa\nbbbccc\nddd\neee"
+        assert_eq!(text(&tree), "aaa\nbbbccc\nddd\neee");
+
+        for start in 0..4usize {
+            for n in 0..=4usize {
+                let by_range = lines_text(&tree, start, n);
+                let by_single: String = (start..start + n)
+                    .map(|l| line_text(&tree, l))
+                    .collect();
+                assert_eq!(
+                    by_range, by_single,
+                    "Mismatch after mutation: start={} n={}",
+                    start, n
+                );
+            }
+        }
+    }
 }
