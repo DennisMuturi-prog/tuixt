@@ -219,8 +219,100 @@ impl PieceTree {
             path,
         }
     }
-    pub fn get_lines_text(&self,start_line_num:usize,num_of_lines:usize,content: &mut String){
+    pub fn get_lines_text(&self, start_line_num: usize, num_of_lines: usize, content: &mut String) {
+        if let Some(root_node) = self.root.as_ref() {
+            let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
+            if start_line_num >= total_lines {
+                return; // out of range — return empty
+            }
+            self.get_lines_helper(root_node, content, start_line_num, num_of_lines);
+        }
+    }
+    fn get_lines_helper(
+        &self,
+        current_node: &Rc<Node>,
+        content: &mut String,
+        start_line_num: usize,
+        num_of_lines: usize,
+    ) {
+        if current_node == &self.black_leaf {
+            return;
+        }
+        let mut start_line_num = start_line_num;
+        let mut num_of_lines = num_of_lines;
+        if start_line_num == 0 && num_of_lines > current_node.left_subtree_line_feed_count {
+            self.in_order_traversal(current_node.left.as_ref().unwrap(), content);
+            num_of_lines = num_of_lines.saturating_sub(current_node.left_subtree_line_feed_count);
+            start_line_num = current_node.left_subtree_line_feed_count;
+        } else if start_line_num <= current_node.left_subtree_line_feed_count {
+            self.get_lines_helper(
+                current_node.left.as_ref().unwrap(),
+                content,
+                start_line_num,
+                num_of_lines,
+            );
+            let lines_taken = min(
+                current_node.left_subtree_line_feed_count - start_line_num,
+                num_of_lines,
+            );
+            num_of_lines -= lines_taken;
+            start_line_num = current_node.left_subtree_line_feed_count;
+        }
+        if num_of_lines == 0 {
+            return;
+        }
+        if start_line_num
+            <= current_node.left_subtree_line_feed_count + current_node.line_feed_count
+        {
+            let buffer = match current_node.buffer_type {
+                BufferType::Original => &self.original,
+                BufferType::Add => &self.add,
+            };
+            let line_starts = match current_node.buffer_type {
+                BufferType::Original => &self.original_line_starts,
+                BufferType::Add => &self.add_line_starts,
+            };
+            let offset_in_node = start_line_num - current_node.left_subtree_line_feed_count;
+            let start_offset = if offset_in_node == 0 {
+                line_starts[current_node.start.line] + current_node.start.column
+            } else {
+                let line = current_node.start.line + offset_in_node;
+                line_starts[line]
+            };
+            let end_offset = if start_line_num + num_of_lines
+                > current_node.left_subtree_line_feed_count + current_node.line_feed_count
+            {
+                line_starts[current_node.end.line] + current_node.end.column
+            } else {
+                let line = current_node.start.line + offset_in_node + num_of_lines;
+                line_starts[line]
+            };
+            content.push_str(&buffer[start_offset..end_offset]);
+            if num_of_lines <= current_node.line_feed_count - offset_in_node {
+                return;
+            }
+            num_of_lines -= current_node.line_feed_count - offset_in_node;
+            start_line_num =
+                current_node.left_subtree_line_feed_count + current_node.line_feed_count;
+        }
+        if num_of_lines == 0 {
+            return;
+        }
 
+        start_line_num -= current_node.left_subtree_line_feed_count + current_node.line_feed_count;
+        let right_subtree_line_feed_count = current_node.subtree_line_feed_count
+            - current_node.left_subtree_line_feed_count
+            - current_node.line_feed_count;
+        if start_line_num == 0 && num_of_lines > right_subtree_line_feed_count {
+            self.in_order_traversal(current_node.right.as_ref().unwrap(), content);
+        } else {
+            self.get_lines_helper(
+                current_node.right.as_ref().unwrap(),
+                content,
+                start_line_num,
+                num_of_lines,
+            );
+        }
     }
     fn get_sub_text_helper(
         &self,

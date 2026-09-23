@@ -1930,4 +1930,187 @@ mod tests {
             }
         }
     }
+
+    // ------------------------------------------------------------
+    // Helper for get_lines_text
+    // ------------------------------------------------------------
+
+    fn lines_text(tree: &PieceTree, start_line: usize, n: usize) -> String {
+        let mut result = String::new();
+        tree.get_lines_text(start_line, n, &mut result);
+        result
+    }
+
+    // ============================================================
+    // get_lines_text
+    // ============================================================
+
+    #[test]
+    fn get_lines_text_empty_doc_returns_empty() {
+        let tree = PieceTree::new("");
+
+        assert_eq!(lines_text(&tree, 0, 0), "");
+        assert_eq!(lines_text(&tree, 0, 1), "");
+        assert_eq!(lines_text(&tree, 0, 10), "");
+    }
+
+    #[test]
+    fn get_lines_text_zero_num_of_lines_returns_empty() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 0), "");
+        assert_eq!(lines_text(&tree, 1, 0), "");
+        assert_eq!(lines_text(&tree, 2, 0), "");
+    }
+
+    #[test]
+    fn get_lines_text_single_line_doc_fetch_one_line() {
+        let tree = PieceTree::new("hello");
+
+        assert_eq!(lines_text(&tree, 0, 1), "hello");
+    }
+
+    #[test]
+    fn get_lines_text_fetch_first_line_from_multiline() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 1), "one\n");
+    }
+
+    #[test]
+    fn get_lines_text_fetch_two_lines_from_start() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 2), "one\ntwo\n");
+    }
+
+    #[test]
+    fn get_lines_text_fetch_all_lines_from_start() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 3), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn get_lines_text_fetch_from_mid_document() {
+        let tree = PieceTree::new("one\ntwo\nthree\nfour");
+
+        // start at line 1 ("two"), fetch 2 lines
+        assert_eq!(lines_text(&tree, 1, 2), "two\nthree\n");
+    }
+
+    #[test]
+    fn get_lines_text_fetch_last_line_only() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 2, 1), "three");
+    }
+
+    #[test]
+    fn get_lines_text_num_of_lines_exceeds_remaining_lines() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        // Ask for 5 lines starting at line 1; only "two\nthree" remain
+        assert_eq!(lines_text(&tree, 1, 5), "two\nthree");
+    }
+
+    #[test]
+    fn get_lines_text_start_line_out_of_range_returns_empty() {
+        let tree = PieceTree::new("one\ntwo\nthree");
+
+        assert_eq!(lines_text(&tree, 10, 3), "");
+        assert_eq!(lines_text(&tree, 100, 1), "");
+    }
+
+    #[test]
+    fn get_lines_text_trailing_newline_line_counts() {
+        let tree = PieceTree::new("one\ntwo\n");
+
+        // "one\n" is line 0, "two\n" is line 1, "" is line 2
+        assert_eq!(lines_text(&tree, 0, 1), "one\n");
+        assert_eq!(lines_text(&tree, 0, 2), "one\ntwo\n");
+        // Fetching the empty trailing line
+        assert_eq!(lines_text(&tree, 2, 1), "");
+    }
+
+    #[test]
+    fn get_lines_text_crlf_line_endings() {
+        let tree = PieceTree::new("one\r\ntwo\r\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 1), "one\r\n");
+        assert_eq!(lines_text(&tree, 0, 2), "one\r\ntwo\r\n");
+        assert_eq!(lines_text(&tree, 1, 2), "two\r\nthree");
+        assert_eq!(lines_text(&tree, 2, 1), "three");
+    }
+
+    #[test]
+    fn get_lines_text_across_inserted_piece_boundary() {
+        let mut tree = PieceTree::new("hello world");
+
+        tree.insert("\none\n", 5);
+        // Document is now "hello\none\n world"
+        assert_eq!(text(&tree), "hello\none\n world");
+
+        assert_eq!(lines_text(&tree, 0, 1), "hello\n");
+        assert_eq!(lines_text(&tree, 0, 2), "hello\none\n");
+        assert_eq!(lines_text(&tree, 0, 3), "hello\none\n world");
+        assert_eq!(lines_text(&tree, 1, 2), "one\n world");
+    }
+
+    #[test]
+    fn get_lines_text_after_delete_that_merges_lines() {
+        let mut tree = PieceTree::new("first\nsecond\nthird");
+
+        // Delete the '\n' between first and second
+        tree.delete(5, 1);
+        // Document is now "firstsecond\nthird"
+        assert_eq!(text(&tree), "firstsecond\nthird");
+
+        assert_eq!(lines_text(&tree, 0, 1), "firstsecond\n");
+        assert_eq!(lines_text(&tree, 0, 2), "firstsecond\nthird");
+        assert_eq!(lines_text(&tree, 1, 1), "third");
+    }
+
+    #[test]
+    fn get_lines_text_unicode_multiline() {
+        let tree = PieceTree::new("🦀 Rust\n🚀 Rocket\n🎉 Party\n");
+
+        assert_eq!(lines_text(&tree, 0, 1), "🦀 Rust\n");
+        assert_eq!(lines_text(&tree, 0, 2), "🦀 Rust\n🚀 Rocket\n");
+        assert_eq!(lines_text(&tree, 0, 3), "🦀 Rust\n🚀 Rocket\n🎉 Party\n");
+        assert_eq!(lines_text(&tree, 1, 2), "🚀 Rocket\n🎉 Party\n");
+        assert_eq!(lines_text(&tree, 2, 1), "🎉 Party\n");
+    }
+
+    #[test]
+    fn get_lines_text_consecutive_newlines() {
+        let tree = PieceTree::new("one\n\nthree");
+
+        assert_eq!(lines_text(&tree, 0, 1), "one\n");
+        assert_eq!(lines_text(&tree, 1, 1), "\n");
+        assert_eq!(lines_text(&tree, 0, 2), "one\n\n");
+        assert_eq!(lines_text(&tree, 0, 3), "one\n\nthree");
+        assert_eq!(lines_text(&tree, 1, 2), "\nthree");
+    }
+
+    #[test]
+    fn get_lines_text_matches_repeated_get_line_text() {
+        // Verify get_lines_text(start, n) == concatenation of get_line_text(start..start+n)
+        let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
+        let tree = PieceTree::new(content);
+
+        for start in 0..5 {
+            for n in 0..=5 {
+                let by_range = lines_text(&tree, start, n);
+                let by_single: String = (start..start + n)
+                    .map(|l| line_text(&tree, l))
+                    .collect();
+                assert_eq!(
+                    by_range, by_single,
+                    "Mismatch for start={} n={}",
+                    start, n
+                );
+            }
+        }
+    }
 }
