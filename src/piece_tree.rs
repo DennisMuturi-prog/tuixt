@@ -74,19 +74,16 @@ impl PieceTree {
     }
     pub fn get_text(&self, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
-            content.clear();
             self.in_order_traversal(root_node, content);
         }
     }
     pub fn get_sub_text(&self, content: &mut String, start_index: usize, length: usize) {
         if let Some(root_node) = self.root.as_ref() {
-            content.clear();
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
     }
     pub fn get_line_text(&self, line_number: usize, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
-            content.clear();
             let mut descent_to_line =
                 self.node_at_start_of_line(root_node.clone(), line_number, content);
             if !descent_to_line.should_continue {
@@ -216,10 +213,14 @@ impl PieceTree {
                 current_node = current_node.right.as_ref().unwrap().clone();
             }
         }
+
         LineDescent {
             should_continue: false,
             path,
         }
+    }
+    pub fn get_lines_text(&self,start_line_num:usize,num_of_lines:usize,content: &mut String){
+
     }
     fn get_sub_text_helper(
         &self,

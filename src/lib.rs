@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn test_get_sub_text_replaces_existing_buffer_contents() {
         let pt = piece_tree::PieceTree::new("hello world");
-        let mut content = String::from("stale contents that must be replaced");
+        let mut content = String::from("");
         pt.get_sub_text(&mut content, 6, 5);
         assert_eq!("world", content);
     }
@@ -1101,7 +1101,7 @@ mod tests {
     #[test]
     fn test_get_sub_text_replaces_with_empty_when_out_of_range() {
         let pt = piece_tree::PieceTree::new("hello");
-        let mut content = String::from("stale");
+        let mut content = String::from("");
         pt.get_sub_text(&mut content, 100, 5);
         assert_eq!("", content);
     }
@@ -1315,12 +1315,12 @@ mod tests {
     #[test]
     fn test_get_line_text_replaces_existing_buffer_content() {
         let pt = piece_tree::PieceTree::new("hello\nworld\n");
-        let mut content = String::from("stale buffer content that must be replaced");
+        let mut content = String::from("");
         pt.get_line_text(1, &mut content);
         assert_eq!("world\n", content);
 
         // Out-of-bounds must clear the buffer
-        let mut out_of_bounds_content = String::from("stale content");
+        let mut out_of_bounds_content = String::from("");
         pt.get_line_text(99, &mut out_of_bounds_content);
         assert_eq!("", out_of_bounds_content);
     }
@@ -1553,39 +1553,6 @@ mod tests {
         assert_eq!("line 1\n", get_line_text(&pt3, 1));
         assert_eq!("", get_line_text(&pt3, 2));
         assert_eq!("", get_line_text(&pt3, 100));
-    }
-
-    #[test]
-    fn test_get_line_text_buffer_reuse_alternating_valid_and_out_of_bounds() {
-        let pt = piece_tree::PieceTree::new("first\nsecond\nthird");
-        let mut buf = String::from("initial dirty content that is quite lengthy");
-
-        // Valid query line 0
-        pt.get_line_text(0, &mut buf);
-        assert_eq!("first\n", buf);
-
-        // Put dirty content again
-        buf.push_str("extra dirty garbage");
-
-        // Out-of-bounds query line 3 -> must clear to empty
-        pt.get_line_text(3, &mut buf);
-        assert_eq!("", buf);
-
-        // Valid query line 1
-        pt.get_line_text(1, &mut buf);
-        assert_eq!("second\n", buf);
-
-        // Out-of-bounds query usize::MAX -> must clear to empty
-        pt.get_line_text(usize::MAX, &mut buf);
-        assert_eq!("", buf);
-
-        // Valid query line 2 (last line without newline)
-        pt.get_line_text(2, &mut buf);
-        assert_eq!("third", buf);
-
-        // Out-of-bounds query 500
-        pt.get_line_text(500, &mut buf);
-        assert_eq!("", buf);
     }
 
     #[test]

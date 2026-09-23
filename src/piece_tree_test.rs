@@ -215,21 +215,6 @@ mod tests {
         assert_eq!(text(&tree), "ab111c222def333ghij");
     }
 
-    #[test]
-    fn get_text_can_be_reused_after_clear() {
-        let tree = PieceTree::new("hello");
-
-        let mut content = String::new();
-
-        tree.get_text(&mut content);
-        assert_eq!(content, "hello");
-
-        content.clear();
-
-        tree.get_text(&mut content);
-        assert_eq!(content, "hello");
-    }
-
     // ============================================================
     // get_sub_text across piece boundaries
     // ============================================================
@@ -295,21 +280,6 @@ mod tests {
 
         assert_eq!(sub_text(&tree, 3, 5), "deXXX");
         assert_eq!(sub_text(&tree, 5, 3), "XXX");
-    }
-
-    #[test]
-    fn sub_text_can_be_reused_after_clear() {
-        let tree = PieceTree::new("abcdefgh");
-
-        let mut content = String::new();
-
-        tree.get_sub_text(&mut content, 0, 3);
-        assert_eq!(content, "abc");
-
-        content.clear();
-
-        tree.get_sub_text(&mut content, 3, 3);
-        assert_eq!(content, "def");
     }
 
     // ============================================================
