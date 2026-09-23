@@ -84,8 +84,142 @@ impl PieceTree {
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
     }
-    pub fn get_line_text(&self,line_number:usize,content:&mut String){
-
+    pub fn get_line_text(&self, line_number: usize, content: &mut String) {
+        if let Some(root_node) = self.root.as_ref() {
+            content.clear();
+            let mut descent_to_line =
+                self.node_at_start_of_line(root_node.clone(), line_number, content);
+            if !descent_to_line.should_continue {
+                return;
+            }
+            let mut has_next = self.next(&mut descent_to_line.path);
+            let mut current_node = Self::last(&descent_to_line.path);
+            while has_next {
+                let buffer = match current_node.buffer_type {
+                    BufferType::Original => &self.original,
+                    BufferType::Add => &self.add,
+                };
+                let line_starts = match current_node.buffer_type {
+                    BufferType::Original => &self.original_line_starts,
+                    BufferType::Add => &self.add_line_starts,
+                };
+                if current_node.line_feed_count == 0 {
+                    let line_start =
+                        line_starts[current_node.start.line] + current_node.start.column;
+                    let line_end = line_starts[current_node.end.line] + current_node.end.column;
+                    content.push_str(&buffer[line_start..line_end]);
+                    has_next = self.next(&mut descent_to_line.path);
+                    current_node = Self::last(&descent_to_line.path);
+                } else {
+                    let line_start =
+                        line_starts[current_node.start.line] + current_node.start.column;
+                    let line_end = if current_node.start.line + 1 < line_starts.len() {
+                        line_starts[current_node.start.line + 1]
+                    } else {
+                        buffer.len()
+                    };
+                    content.push_str(&buffer[line_start..line_end]);
+                    break;
+                }
+            }
+        }
+    }
+    fn node_at_start_of_line(
+        &self,
+        root: Rc<Node>,
+        line_number: usize,
+        content: &mut String,
+    ) -> LineDescent {
+        let mut line_number = line_number;
+        let mut current_node = root;
+        let mut path: Vec<Rc<Node>> = Vec::new();
+        if line_number == 0 {
+            let mut dest = current_node.clone();
+            while current_node != self.black_leaf {
+                path.push(current_node.clone());
+                dest = current_node.clone();
+                current_node = current_node.left.as_ref().unwrap().clone();
+            }
+            let buffer = match dest.buffer_type {
+                BufferType::Original => &self.original,
+                BufferType::Add => &self.add,
+            };
+            let line_starts = match dest.buffer_type {
+                BufferType::Original => &self.original_line_starts,
+                BufferType::Add => &self.add_line_starts,
+            };
+            if dest.line_feed_count == 0 {
+                let line_start = line_starts[dest.start.line] + dest.start.column;
+                let line_end = line_starts[dest.end.line] + dest.end.column;
+                content.push_str(&buffer[line_start..line_end]);
+                return LineDescent {
+                    should_continue: true,
+                    path,
+                };
+            } else {
+                let line_start = line_starts[dest.start.line] + dest.start.column;
+                let line_end = if dest.start.line + 1 < line_starts.len() {
+                    line_starts[dest.start.line + 1]
+                } else {
+                    buffer.len()
+                };
+                content.push_str(&buffer[line_start..line_end]);
+                return LineDescent {
+                    should_continue: false,
+                    path,
+                };
+            }
+        }
+        while current_node != self.black_leaf {
+            path.push(current_node.clone());
+            if line_number <= current_node.left_subtree_line_feed_count {
+                current_node = current_node.left.as_ref().unwrap().clone();
+            } else if current_node.left_subtree_line_feed_count + current_node.line_feed_count
+                >= line_number
+            {
+                let offset_in_node = line_number - current_node.left_subtree_line_feed_count;
+                let line = current_node.start.line + offset_in_node;
+                let buffer = match current_node.buffer_type {
+                    BufferType::Original => &self.original,
+                    BufferType::Add => &self.add,
+                };
+                let line_starts = match current_node.buffer_type {
+                    BufferType::Original => &self.original_line_starts,
+                    BufferType::Add => &self.add_line_starts,
+                };
+                if line_number
+                    < current_node.left_subtree_line_feed_count + current_node.line_feed_count
+                {
+                    let line_start = line_starts[line];
+                    let line_end = if line + 1 < line_starts.len() {
+                        line_starts[line + 1]
+                    } else {
+                        buffer.len()
+                    };
+                    content.push_str(&buffer[line_start..line_end]);
+                    return LineDescent {
+                        should_continue: false,
+                        path,
+                    };
+                } else {
+                    let line_start = line_starts[line];
+                    let line_end = line_starts[current_node.end.line] + current_node.end.column;
+                    content.push_str(&buffer[line_start..line_end]);
+                    return LineDescent {
+                        should_continue: true,
+                        path,
+                    };
+                }
+            } else {
+                line_number -=
+                    current_node.left_subtree_line_feed_count + current_node.line_feed_count;
+                current_node = current_node.right.as_ref().unwrap().clone();
+            }
+        }
+        LineDescent {
+            should_continue: false,
+            path,
+        }
     }
     fn get_sub_text_helper(
         &self,
@@ -1306,6 +1440,10 @@ impl Color {
 struct NodePosition {
     start_offset: usize,
     remainder: usize,
+    path: Vec<Rc<Node>>,
+}
+struct LineDescent {
+    should_continue: bool,
     path: Vec<Rc<Node>>,
 }
 fn find_line_starts(content: &str, offset: usize, line_starts: &mut Vec<usize>) {
