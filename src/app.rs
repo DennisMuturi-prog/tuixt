@@ -43,7 +43,7 @@ impl App {
         let piece_tree = PieceTree::new(initial_content);
         let mut buffer = String::with_capacity(window_height * window_width);
         piece_tree.get_lines_text(0, window_height, &mut buffer);
-        let mut lines = Vec::with_capacity(window_height );
+        let mut lines = Vec::with_capacity(window_height);
         compute_line_starts(&buffer, &mut lines);
         Self {
             piece_tree,
@@ -234,10 +234,33 @@ impl App {
                             self.insert_char(value);
                         }
                         KeyCode::Left => {
+                            if self.row_number == 0
+                                && self.column_number == 0
+                                && (self.start_line_number as i32 - 1) >= 0
+                            {
+                                self.start_line_number -= 1;
+                                self.start_index = self
+                                    .piece_tree
+                                    .get_start_offset_of_a_line(self.start_line_number);
+                                self.refresh_content();
+                            }
                             self.index = self.index.saturating_sub(1);
                             self.compute_row_and_col_from_index();
                         }
                         KeyCode::Right => {
+                            if self.row_number + 1 >= self.window_height
+                                && self.column_number + 1 >= self.lines[self.row_number].length()
+                            {
+                                let total_lines = self.piece_tree.get_line_feed_count() + 1;
+                                if self.start_line_number + self.row_number + 1 < total_lines {
+                                    self.start_line_number += 1;
+                                    self.start_index = self
+                                        .piece_tree
+                                        .get_start_offset_of_a_line(self.start_line_number);
+                                    self.refresh_content();
+                                }
+                            }
+
                             let content_len = self.piece_tree.get_tree_len();
                             self.index = min(content_len, self.index + 1);
                             self.compute_row_and_col_from_index();
@@ -260,7 +283,7 @@ impl App {
                         KeyCode::Down => {
                             if self.row_number + 1 >= self.window_height {
                                 let total_lines = self.piece_tree.get_line_feed_count() + 1;
-                                if self.start_line_number + self.row_number +1 < total_lines {
+                                if self.start_line_number + self.row_number + 1 < total_lines {
                                     self.start_line_number += 1;
                                     self.start_index = self
                                         .piece_tree
@@ -382,19 +405,19 @@ impl App {
         for line in self.lines.iter().take(self.row_number) {
             match line.line_type {
                 LineType::Independent => {
-                    sum += line.length + 1;
+                    sum += line.length();
                 }
                 LineType::Start => {
-                    sum += line.length;
+                    sum += line.length();
                 }
                 LineType::Between => {
-                    sum -= line.length;
+                    sum -= line.length();
                 }
                 LineType::End => {
-                    sum += line.length + 1;
+                    sum += line.length();
                 }
                 LineType::Empty => {
-                    sum += line.length;
+                    sum += line.length();
                 }
             }
         }
@@ -408,19 +431,19 @@ impl App {
             if remainder > line.length {
                 match line.line_type {
                     LineType::Independent => {
-                        remainder -= line.length + 1;
+                        remainder -= line.length();
                     }
                     LineType::Start => {
-                        remainder -= line.length;
+                        remainder -= line.length();
                     }
                     LineType::Between => {
-                        remainder -= line.length;
+                        remainder -= line.length();
                     }
                     LineType::End => {
-                        remainder -= line.length + 1;
+                        remainder -= line.length();
                     }
                     LineType::Empty => {
-                        remainder -= line.length;
+                        remainder -= line.length();
                     }
                 }
                 rows += 1;
@@ -508,6 +531,17 @@ pub struct TextEditorLine {
     start_in_buffer: usize,
     length: usize,
     line_type: LineType,
+}
+impl TextEditorLine {
+    fn length(&self) -> usize {
+        match self.line_type {
+            LineType::Independent => self.length + 1,
+            LineType::Start => self.length,
+            LineType::Between => self.length,
+            LineType::End => self.length + 1,
+            LineType::Empty => 0,
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
