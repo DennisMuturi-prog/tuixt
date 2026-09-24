@@ -30,6 +30,10 @@ mod tests {
         result
     }
 
+    fn line_start_offset(tree: &PieceTree, line_number: usize) -> usize {
+        tree.get_start_offset_of_a_line(line_number)
+    }
+
     // ------------------------------------------------------------
     // Reference model + PRNG (for differential / fuzz tests)
     // ------------------------------------------------------------
@@ -65,6 +69,17 @@ mod tests {
             lines.push(String::new());
         }
         lines
+    }
+
+    /// Byte offset where `line_num` starts in `s`, computed from the document
+    /// text alone (independent of the piece tree). Out-of-range line numbers
+    /// map to the end of the document.
+    fn reference_line_start_offset(s: &str, line_num: usize) -> usize {
+        let lines = reference_lines(s);
+        if line_num >= lines.len() {
+            return s.len();
+        }
+        lines[..line_num].iter().map(|l| l.len()).sum()
     }
 
     struct ReferenceModel {
@@ -700,6 +715,215 @@ mod tests {
         );
 
         assert_all_windows_match(&tree, &model.text);
+    }
+
+    // ============================================================
+    // get_start_offset_of_a_line
+    // ============================================================
+
+    #[test]
+    fn line_start_offset_basic() {
+        // "one\n" = 4 bytes, "two\n" = 4 bytes, "three" = 5 bytes.
+        let tree = PieceTree::new("one\ntwo\nthree");
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 4);
+        assert_eq!(line_start_offset(&tree, 2), 8);
+        // Out of range maps to the end of the document.
+        assert_eq!(line_start_offset(&tree, 3), 13);
+        assert_eq!(line_start_offset(&tree, 10), 13);
+        assert_eq!(line_start_offset(&tree, usize::MAX), 13);
+    }
+
+    #[test]
+    fn line_start_offset_empty_and_single_line() {
+        let empty = PieceTree::new("");
+        assert_eq!(line_start_offset(&empty, 0), 0);
+        assert_eq!(line_start_offset(&empty, 1), 0);
+
+        let single = PieceTree::new("hello");
+        assert_eq!(line_start_offset(&single, 0), 0);
+        // Only line 0 exists; anything past it is the end offset.
+        assert_eq!(line_start_offset(&single, 1), 5);
+        assert_eq!(line_start_offset(&single, 99), 5);
+    }
+
+    #[test]
+    fn line_start_offset_trailing_and_consecutive_newlines() {
+        let trailing = PieceTree::new("hello\n");
+        assert_eq!(line_start_offset(&trailing, 0), 0);
+        assert_eq!(line_start_offset(&trailing, 1), 6);
+        assert_eq!(line_start_offset(&trailing, 2), 6);
+
+        // "one\n"=4, "\n"=1, "three"=5 -> 10 bytes total.
+        let consecutive = PieceTree::new("one\n\nthree");
+        assert_eq!(line_start_offset(&consecutive, 0), 0);
+        assert_eq!(line_start_offset(&consecutive, 1), 4);
+        assert_eq!(line_start_offset(&consecutive, 2), 5);
+        assert_eq!(line_start_offset(&consecutive, 3), 10);
+
+        let only_newlines = PieceTree::new("\n\n\n");
+        assert_eq!(line_start_offset(&only_newlines, 0), 0);
+        assert_eq!(line_start_offset(&only_newlines, 1), 1);
+        assert_eq!(line_start_offset(&only_newlines, 2), 2);
+        assert_eq!(line_start_offset(&only_newlines, 3), 3);
+        assert_eq!(line_start_offset(&only_newlines, 4), 3);
+    }
+
+    #[test]
+    fn line_start_offset_crlf_and_mixed_newlines() {
+        // Each CRLF line is 5 bytes ("one\r\n").
+        let crlf = PieceTree::new("one\r\ntwo\r\nthree");
+        assert_eq!(line_start_offset(&crlf, 0), 0);
+        assert_eq!(line_start_offset(&crlf, 1), 5);
+        assert_eq!(line_start_offset(&crlf, 2), 10);
+        assert_eq!(line_start_offset(&crlf, 3), 15);
+
+        let mixed = PieceTree::new("line1\r\nline2\nline3\r\nline4\n");
+        // 7, 6, 7, 6, then a trailing empty line.
+        assert_eq!(line_start_offset(&mixed, 0), 0);
+        assert_eq!(line_start_offset(&mixed, 1), 7);
+        assert_eq!(line_start_offset(&mixed, 2), 13);
+        assert_eq!(line_start_offset(&mixed, 3), 20);
+        assert_eq!(line_start_offset(&mixed, 4), 26);
+        assert_eq!(line_start_offset(&mixed, 5), 26);
+    }
+
+    #[test]
+    fn line_start_offset_after_inserting_newline() {
+        let mut tree = PieceTree::new("hello world");
+        tree.insert("\n", 5);
+        // "hello\n world"
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 6);
+        assert_eq!(line_start_offset(&tree, 2), 12);
+    }
+
+    #[test]
+    fn line_start_offset_after_deleting_newline() {
+        let mut tree = PieceTree::new("hello\nworld");
+        assert_eq!(line_start_offset(&tree, 1), 6);
+
+        tree.delete(5, 1);
+        // Merged into a single line "helloworld".
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 10);
+    }
+
+    #[test]
+    fn line_start_offset_unicode_byte_offsets() {
+        // 🦀=4 bytes, 🚀=4 bytes, 🎉=4 bytes.
+        let tree = PieceTree::new("🦀 Rust\n🚀 Rocket\n🎉 Party\n");
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 10);
+        assert_eq!(line_start_offset(&tree, 2), 22);
+        assert_eq!(line_start_offset(&tree, 3), 33);
+        assert_eq!(line_start_offset(&tree, 4), 33);
+    }
+
+    #[test]
+    fn line_start_offset_consistent_with_line_text_and_sub_text() {
+        // The offset of a line, combined with its length, must reproduce the
+        // exact line content (including its terminator) via get_sub_text, and
+        // consecutive line offsets must be contiguous.
+        let mut tree = PieceTree::new("aaa\nbbb\nccc\nddd\neee");
+        tree.insert("XX", 3);
+        tree.delete(7, 1);
+
+        let mut doc = String::new();
+        tree.get_text(&mut doc);
+        let lines = reference_lines(&doc);
+
+        let mut expected_offset = 0;
+        for (i, line) in lines.iter().enumerate() {
+            let offset = line_start_offset(&tree, i);
+            assert_eq!(offset, expected_offset, "start offset of line {}", i);
+            assert_eq!(line_text(&tree, i), *line, "line {} content", i);
+            assert_eq!(
+                sub_text(&tree, offset, line.len()),
+                *line,
+                "sub_text at line {} start",
+                i
+            );
+            expected_offset += line.len();
+        }
+        assert_eq!(line_start_offset(&tree, lines.len()), doc.len());
+    }
+
+    #[test]
+    fn line_start_offset_differential_fuzz() {
+        let seeds = [3u64, 42, 0xABCD, 20240924];
+        let snippets = [
+            "a", "bc", "hello\n", "line\n", "\n", "\r\n", "\n\n",
+            "foo\nbar\nbaz\n", "world", "🦀", "世界", " \n ", "x\ny\nz\n",
+        ];
+
+        for &seed in &seeds {
+            let mut prng = SimplePrng::new(seed);
+            let mut tree = PieceTree::new("initial\ncontent\n");
+            let mut model = ReferenceModel::new("initial\ncontent\n");
+
+            for step in 0..200 {
+                let op = prng.next_range(0, 100);
+                if op < 50 || model.text.is_empty() {
+                    let snippet = snippets[prng.next_range(0, snippets.len())];
+                    let boundaries = char_boundaries(&model.text);
+                    let at = boundaries[prng.next_range(0, boundaries.len())];
+                    tree.insert(snippet, at);
+                    model.insert(snippet, at);
+                } else if op < 75 {
+                    let boundaries = char_boundaries(&model.text);
+                    if boundaries.len() > 1 {
+                        let a = prng.next_range(0, boundaries.len());
+                        let b = prng.next_range(0, boundaries.len());
+                        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                        let start = boundaries[lo];
+                        let len = boundaries[hi] - start;
+                        tree.delete(start, len);
+                        model.delete(start, len);
+                    }
+                } else if op < 88 {
+                    tree.undo();
+                    model.undo();
+                } else {
+                    tree.redo();
+                    model.redo();
+                }
+
+                assert_eq!(text(&tree), model.text, "seed {} step {}", seed, step);
+
+                let lines = reference_lines(&model.text);
+                for (i, line) in lines.iter().enumerate() {
+                    let expected = reference_line_start_offset(&model.text, i);
+                    assert_eq!(
+                        line_start_offset(&tree, i),
+                        expected,
+                        "seed {} step {}: line {} offset",
+                        seed,
+                        step,
+                        i
+                    );
+                    assert_eq!(
+                        sub_text(&tree, expected, line.len()),
+                        *line,
+                        "seed {} step {}: sub_text at line {}",
+                        seed,
+                        step,
+                        i
+                    );
+                }
+
+                for &extra in &[lines.len(), lines.len() + 1, lines.len() + 7] {
+                    assert_eq!(
+                        line_start_offset(&tree, extra),
+                        model.text.len(),
+                        "seed {} step {}: out-of-range line {}",
+                        seed,
+                        step,
+                        extra
+                    );
+                }
+            }
+        }
     }
 
     // ============================================================

@@ -1,5 +1,5 @@
 use core::panic;
-use std::{cmp::min, rc::Rc};
+use std::{cmp::min, rc::Rc, usize};
 
 #[derive(Debug)]
 pub struct PieceTree {
@@ -219,17 +219,62 @@ impl PieceTree {
             path,
         }
     }
+    pub fn get_start_offset_of_a_line(&self, line_number: usize) -> usize {
+        if line_number == 0 {
+            return 0;
+        }
+        if let Some(root_node) = self.root.as_ref() {
+            let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
+            if line_number >= total_lines {
+                return root_node.subtree_len; // out of range — return empty
+            }
+            self.get_start_offset_of_a_line_helper(root_node.clone(), line_number)
+        } else {
+            return 0;
+        }
+    }
+    fn get_start_offset_of_a_line_helper(&self, root: Rc<Node>, line_number: usize) -> usize { 
+        let mut line_number = line_number;
+        let mut current_node = root;
+        let mut start_offset = 0;
+        while current_node != self.black_leaf {
+            if line_number <= current_node.left_subtree_line_feed_count {
+                current_node = current_node.left.as_ref().unwrap().clone();
+            } else if current_node.left_subtree_line_feed_count + current_node.line_feed_count
+                >= line_number
+            {
+                let offset_in_node = line_number - current_node.left_subtree_line_feed_count;
+                let line = current_node.start.line + offset_in_node;
+                let line_starts = match current_node.buffer_type {
+                    BufferType::Original => &self.original_line_starts,
+                    BufferType::Add => &self.add_line_starts,
+                };
+                let start_of_this_node =
+                    line_starts[current_node.start.line] + current_node.start.column;
+                let start_of_line = line_starts[line];
+                let difference = start_of_line - start_of_this_node;
+                start_offset += current_node.left_subtree_len + difference;
+                return start_offset;
+            } else {
+                line_number -=
+                    current_node.left_subtree_line_feed_count + current_node.line_feed_count;
+                start_offset += current_node.left_subtree_len + current_node.length;
+                current_node = current_node.right.as_ref().unwrap().clone();
+            }
+        }
+        start_offset
+    }
     pub fn get_lines_text(&self, start_line_num: usize, num_of_lines: usize, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
-        let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
-        if start_line_num >= total_lines {
-            return; // out of range — return empty
-        }
-        // Clamp the requested count to the lines actually remaining. Without
-        // this, `get_lines_helper` can overflow when computing
-        // `start_line_num + num_of_lines` (e.g. `get_lines_text(1, usize::MAX)`).
-        let num_of_lines = num_of_lines.min(total_lines - start_line_num);
-        self.get_lines_helper(root_node, content, start_line_num, num_of_lines);
+            let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
+            if start_line_num >= total_lines {
+                return; // out of range — return empty
+            }
+            // Clamp the requested count to the lines actually remaining. Without
+            // this, `get_lines_helper` can overflow when computing
+            // `start_line_num + num_of_lines` (e.g. `get_lines_text(1, usize::MAX)`).
+            let num_of_lines = num_of_lines.min(total_lines - start_line_num);
+            self.get_lines_helper(root_node, content, start_line_num, num_of_lines);
         }
     }
     fn get_lines_helper(
@@ -1668,15 +1713,7 @@ impl PieceTree {
             };
             let mut running = 0usize;
             if let Some(root) = self.root.as_ref() {
-                self.region_walk(
-                    root,
-                    2,
-                    true,
-                    &mut running,
-                    line_start,
-                    line_end,
-                    &mut span,
-                );
+                self.region_walk(root, 2, true, &mut running, line_start, line_end, &mut span);
             }
             spans.push(span);
         }
@@ -1760,7 +1797,10 @@ impl PieceTree {
 
         // Transient deletion markers must never survive an edit.
         if node.color == Color::DoubleBlack || node.color == Color::NegativeBlack {
-            violations.push(format!("internal node has transient color {:?}", node.color));
+            violations.push(format!(
+                "internal node has transient color {:?}",
+                node.color
+            ));
         }
 
         let left = match node.left.as_ref() {
