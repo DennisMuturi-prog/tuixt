@@ -221,11 +221,15 @@ impl PieceTree {
     }
     pub fn get_lines_text(&self, start_line_num: usize, num_of_lines: usize, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
-            let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
-            if start_line_num >= total_lines {
-                return; // out of range — return empty
-            }
-            self.get_lines_helper(root_node, content, start_line_num, num_of_lines);
+        let total_lines = root_node.subtree_line_feed_count + 1; // +1 for the last unterminated line
+        if start_line_num >= total_lines {
+            return; // out of range — return empty
+        }
+        // Clamp the requested count to the lines actually remaining. Without
+        // this, `get_lines_helper` can overflow when computing
+        // `start_line_num + num_of_lines` (e.g. `get_lines_text(1, usize::MAX)`).
+        let num_of_lines = num_of_lines.min(total_lines - start_line_num);
+        self.get_lines_helper(root_node, content, start_line_num, num_of_lines);
         }
     }
     fn get_lines_helper(
@@ -1599,44 +1603,200 @@ fn find_nearest_start_and_column_in_it(
 // colors and black heights, and therefore cannot see a broken tree). They are
 // compiled only under `cfg(test)` and add no behavior to the library.
 // ============================================================================
+
+/// Per-line structural view used by the `get_lines_text` tests.
 #[cfg(test)]
-#[derive(Debug, Clone, Default)]
-pub struct InvariantReport {
-    /// number of internal nodes visited
-    pub nodes: usize,
-    /// deepest internal node count along any path
-    pub max_depth: usize,
-    /// black height of the root (0 when the tree is empty)
-    pub root_black_height: i32,
-    /// every invariant that was found broken (capped; see `violation_count`)
-    pub violations: Vec<String>,
-    /// total number of violations, including any not listed in `violations`
-    pub violation_count: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineSpan {
+    /// number of pieces whose document range overlaps this line
+    pub pieces: usize,
+    /// the line's pieces include one living in the root's left subtree
+    pub touches_left: bool,
+    /// the line's pieces include the root node's own piece
+    pub touches_node: bool,
+    /// the line's pieces include one living in the root's right subtree
+    pub touches_right: bool,
 }
 
 #[cfg(test)]
-impl InvariantReport {
-    /// True when the tree satisfies every red-black invariant.
-    pub fn is_ok(&self) -> bool {
-        self.violation_count == 0
+impl LineSpan {
+    /// True when a single line is stitched together from the root's left
+    /// subtree, the root node itself, and the root's right subtree.
+    pub fn spans_all_regions(&self) -> bool {
+        self.touches_left && self.touches_node && self.touches_right
+    }
+}
+
+#[cfg(test)]
+impl PieceTree {
+    /// Describes, for every logical line in the document, how many pieces it is
+    /// made of and which of the root's three regions those pieces live in.
+    ///
+    /// The region of a piece is relative to the current root: the root's left
+    /// subtree, the root node's own piece, or the root's right subtree. This is
+    /// exactly the left/node/right split `get_lines_text` has to stitch back
+    /// together, so tests can assert a line genuinely exercises all three.
+    pub fn line_spans(&self) -> Vec<LineSpan> {
+        let mut text = String::new();
+        self.get_text(&mut text);
+
+        let mut line_ranges: Vec<(usize, usize)> = Vec::new();
+        if text.is_empty() {
+            line_ranges.push((0, 0));
+        } else {
+            let mut start = 0usize;
+            for (i, b) in text.bytes().enumerate() {
+                if b == b'\n' {
+                    line_ranges.push((start, i + 1));
+                    start = i + 1;
+                }
+            }
+            if start < text.len() {
+                line_ranges.push((start, text.len()));
+            } else if text.ends_with('\n') {
+                line_ranges.push((start, start));
+            }
+        }
+
+        let mut spans = Vec::with_capacity(line_ranges.len());
+        for &(line_start, line_end) in &line_ranges {
+            let mut span = LineSpan {
+                pieces: 0,
+                touches_left: false,
+                touches_node: false,
+                touches_right: false,
+            };
+            let mut running = 0usize;
+            if let Some(root) = self.root.as_ref() {
+                self.region_walk(
+                    root,
+                    2,
+                    true,
+                    &mut running,
+                    line_start,
+                    line_end,
+                    &mut span,
+                );
+            }
+            spans.push(span);
+        }
+        spans
     }
 
-    pub fn summary(&self) -> String {
-        let mut out = format!(
-            "{} violation(s), {} node(s), max depth {}, root black height {}\n",
-            self.violation_count, self.nodes, self.max_depth, self.root_black_height
-        );
-        for v in &self.violations {
-            out.push_str("  - ");
-            out.push_str(v);
-            out.push('\n');
+    fn region_walk(
+        &self,
+        node: &Rc<Node>,
+        region: u8,
+        is_root: bool,
+        running: &mut usize,
+        line_start: usize,
+        line_end: usize,
+        span: &mut LineSpan,
+    ) {
+        if node == &self.black_leaf {
+            return;
         }
-        if self.violation_count > self.violations.len() {
-            out.push_str(&format!(
-                "  ... and {} more\n",
-                self.violation_count - self.violations.len()
+        let left_region = if is_root { 1 } else { region };
+        self.region_walk(
+            node.left.as_ref().unwrap(),
+            left_region,
+            false,
+            running,
+            line_start,
+            line_end,
+            span,
+        );
+
+        let start = *running;
+        let end = start + node.length;
+        *running = end;
+        if node.length > 0 && start < line_end && end > line_start {
+            span.pieces += 1;
+            match region {
+                1 => span.touches_left = true,
+                2 => span.touches_node = true,
+                _ => span.touches_right = true,
+            }
+        }
+
+        let right_region = if is_root { 3 } else { region };
+        self.region_walk(
+            node.right.as_ref().unwrap(),
+            right_region,
+            false,
+            running,
+            line_start,
+            line_end,
+            span,
+        );
+    }
+
+    /// Verifies the red-black invariants and returns a description of every
+    /// violation found (empty when the tree is valid). This catches structural
+    /// corruption that document-text comparison cannot: a red child of a red
+    /// node, unequal black heights, or a transient `DoubleBlack` /
+    /// `NegativeBlack` marker left behind after an edit.
+    pub fn check_invariants(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+        if let Some(root) = self.root.as_ref() {
+            if root.color != Color::Black {
+                violations.push(format!("root is {:?}, expected Black", root.color));
+            }
+            Self::check_node_invariants(root, &mut violations);
+        }
+        violations
+    }
+
+    /// Returns the black height of the subtree rooted at `node`, recording any
+    /// invariant violations in `violations`.
+    fn check_node_invariants(node: &Node, violations: &mut Vec<String>) -> usize {
+        // A sentinel leaf must be the plain black leaf.
+        if node.length == 0 {
+            if node.color != Color::Black {
+                violations.push(format!("leaf has color {:?}, expected Black", node.color));
+            }
+            return 1;
+        }
+
+        // Transient deletion markers must never survive an edit.
+        if node.color == Color::DoubleBlack || node.color == Color::NegativeBlack {
+            violations.push(format!("internal node has transient color {:?}", node.color));
+        }
+
+        let left = match node.left.as_ref() {
+            Some(l) => l,
+            None => {
+                violations.push("internal node has no left child".to_string());
+                return 1;
+            }
+        };
+        let right = match node.right.as_ref() {
+            Some(r) => r,
+            None => {
+                violations.push("internal node has no right child".to_string());
+                return 1;
+            }
+        };
+
+        // A red node may not have a red child.
+        if node.color == Color::Red {
+            if left.color == Color::Red {
+                violations.push("red node has a red left child".to_string());
+            }
+            if right.color == Color::Red {
+                violations.push("red node has a red right child".to_string());
+            }
+        }
+
+        let left_black_height = Self::check_node_invariants(left, violations);
+        let right_black_height = Self::check_node_invariants(right, violations);
+        if left_black_height != right_black_height {
+            violations.push(format!(
+                "black height mismatch: left {} vs right {}",
+                left_black_height, right_black_height
             ));
         }
-        out
+
+        left_black_height + if node.color == Color::Black { 1 } else { 0 }
     }
 }
