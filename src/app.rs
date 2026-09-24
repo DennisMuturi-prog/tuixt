@@ -3,6 +3,7 @@ use std::{
     io,
 };
 
+use crossterm::{cursor::SetCursorStyle, execute};
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -76,7 +77,7 @@ impl App {
             .split(area);
 
         let title_block = Block::default()
-            .borders(Borders::ALL)
+            .borders(Borders::BOTTOM)
             .style(Style::default());
         let line_numbers_block = Block::default()
             .borders(Borders::RIGHT)
@@ -90,7 +91,7 @@ impl App {
         frame.render_widget(title, chunks[0]);
         let text_section = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(5), Constraint::Min(1)])
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
             .split(chunks[1]);
 
         let line_numbers = Paragraph::new(self.get_line_numbers_gutter())
@@ -99,7 +100,7 @@ impl App {
         let text_content = Paragraph::new(self.get_display_content());
         frame.render_widget(text_content, text_section[1]);
         frame.render_widget(line_numbers, text_section[0]);
-        if let Mode::Editing = self.mode {
+        if matches!(self.mode,Mode::Editing | Mode::Normal){
             frame.set_cursor_position(Position::new(
                 // Draw the cursor at the current position in the input field.
                 // This position is can be controlled via the left and right arrow key
@@ -187,6 +188,7 @@ impl App {
                     Mode::Normal => match key.code {
                         KeyCode::Char('e') => {
                             self.mode = Mode::Editing;
+                            execute!(std::io::stdout(), SetCursorStyle::BlinkingBar)?;
                         }
                         KeyCode::Char('q') => {
                             self.mode = Mode::Exiting;
@@ -214,6 +216,7 @@ impl App {
                         }
                         KeyCode::Esc => {
                             self.mode = Mode::Normal;
+                            execute!(std::io::stdout(), SetCursorStyle::SteadyBlock)?;
                         }
                         KeyCode::Tab => {}
                         KeyCode::Char('z') => {

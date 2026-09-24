@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::terminal::size;
+use crossterm::{cursor::SetCursorStyle, execute, terminal::size};
 use tuixt::{app::{App, compute_line_starts}, piece_tree::PieceTree};
 
 fn main() -> io::Result<()> {
@@ -18,7 +18,8 @@ fn main() -> io::Result<()> {
         initial_window_width as usize,
         false,
     );
-    ratatui::run(|terminal| app.run(terminal))
+    ratatui::run(|terminal| app.run(terminal))?;
+    execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape)
 }
 fn testing_if_lines_are_being_created_correctly() {
     let mut piece_tree = PieceTree::default();
