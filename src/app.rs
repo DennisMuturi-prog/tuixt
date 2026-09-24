@@ -1,4 +1,7 @@
-use std::{io, usize};
+use std::{
+    cmp::{max, min},
+    io,
+};
 
 use ratatui::{
     DefaultTerminal, Frame,
@@ -6,7 +9,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Position},
     prelude::Rect,
     style::{Color, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span, Text, ToLine},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
@@ -39,8 +42,8 @@ impl App {
     ) -> Self {
         let piece_tree = PieceTree::new(initial_content);
         let mut buffer = String::with_capacity(window_height * window_width);
-        piece_tree.get_lines_text(0, window_height + 1, &mut buffer);
-        let mut lines = Vec::with_capacity(window_height + 1);
+        piece_tree.get_lines_text(0, window_height, &mut buffer);
+        let mut lines = Vec::with_capacity(window_height );
         compute_line_starts(&buffer, &mut lines);
         Self {
             piece_tree,
@@ -90,10 +93,10 @@ impl App {
             .constraints([Constraint::Length(5), Constraint::Min(1)])
             .split(chunks[1]);
 
-        let line_numbers = Paragraph::new("hello")
+        let line_numbers = Paragraph::new(self.get_line_numbers_gutter())
             .block(line_numbers_block)
             .alignment(Alignment::Right);
-        let text_content = Paragraph::new("world");
+        let text_content = Paragraph::new(self.get_display_content());
         frame.render_widget(text_content, text_section[1]);
         frame.render_widget(line_numbers, text_section[0]);
         if let Mode::Editing = self.mode {
@@ -124,7 +127,9 @@ impl App {
             Span::styled(
                 format!(
                     "column {} row {} index:{}",
-                    self.column_number, self.row_number, self.index
+                    self.column_number,
+                    self.row_number + self.start_line_number + 1,
+                    self.index
                 ),
                 Style::default().fg(Color::Green),
             ),
@@ -201,15 +206,13 @@ impl App {
                     },
                     Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Enter => {
-                            self.cursor_up_and_down_column_position_locked = false;
-                            self.jump_to_new_line();
+                            self.insert("\n");
+                            // panic!("buffer is {}",self.buffer);
                         }
                         KeyCode::Backspace => {
-                            self.cursor_up_and_down_column_position_locked = false;
                             self.delete_char();
                         }
                         KeyCode::Esc => {
-                            self.cursor_up_and_down_column_position_locked = false;
                             self.mode = Mode::Normal;
                         }
                         KeyCode::Tab => {}
@@ -217,35 +220,58 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.cursor_up_and_down_column_position_locked = false;
-                                self.add_char('z');
+                                self.insert_char('y');
                             }
                         }
                         KeyCode::Char('y') => {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
-                                self.cursor_up_and_down_column_position_locked = false;
-                                self.add_char('y');
+                                self.insert_char('y');
                             }
                         }
                         KeyCode::Char(value) => {
-                            self.cursor_up_and_down_column_position_locked = false;
-                            self.add_char(value);
+                            self.insert_char(value);
                         }
                         KeyCode::Left => {
-                            self.cursor_up_and_down_column_position_locked = false;
-                            self.move_cursor_left(0, self.index.saturating_sub(1));
+                            self.index = self.index.saturating_sub(1);
+                            self.compute_row_and_col_from_index();
                         }
                         KeyCode::Right => {
-                            self.cursor_up_and_down_column_position_locked = false;
-                            self.move_cursor_right(self.index + 1)
+                            let content_len = self.piece_tree.get_tree_len();
+                            self.index = min(content_len, self.index + 1);
+                            self.compute_row_and_col_from_index();
                         }
                         KeyCode::Up => {
-                            self.move_line_up();
+                            if self.row_number == 0 {
+                                if (self.start_line_number as i32 - 1) >= 0 {
+                                    self.start_line_number -= 1;
+                                    self.start_index = self
+                                        .piece_tree
+                                        .get_start_offset_of_a_line(self.start_line_number);
+                                    self.refresh_content();
+                                    self.compute_index_from_row_and_col();
+                                }
+                            } else {
+                                self.row_number -= 1;
+                                self.compute_index_from_row_and_col();
+                            }
                         }
                         KeyCode::Down => {
-                            self.move_line_down();
+                            if self.row_number + 1 >= self.window_height {
+                                let total_lines = self.piece_tree.get_line_feed_count() + 1;
+                                if self.start_line_number + self.row_number +1 < total_lines {
+                                    self.start_line_number += 1;
+                                    self.start_index = self
+                                        .piece_tree
+                                        .get_start_offset_of_a_line(self.start_line_number);
+                                    self.refresh_content();
+                                    self.compute_index_from_row_and_col();
+                                }
+                            } else {
+                                self.row_number = min(self.row_number + 1, self.lines.len() - 1);
+                                self.compute_index_from_row_and_col();
+                            }
                         }
                         _ => {}
                     },
@@ -254,28 +280,131 @@ impl App {
             }
             Event::Paste(pasted_string) => {
                 if let Mode::Editing = self.mode {
-                    self.paste(pasted_string);
+                    self.insert(&pasted_string);
                 }
             }
             _ => (),
         }
         Ok(())
     }
+    fn get_line_numbers_gutter(&self) -> String {
+        let mut line_number_display = self.start_line_number + 1;
+        let mut gutter = String::with_capacity(self.lines.len() * 2);
+
+        for line in self.lines.iter().take(self.window_height) {
+            match line.line_type {
+                LineType::Independent => {
+                    gutter.push_str(&line_number_display.to_string());
+                    line_number_display += 1;
+                    gutter.push('\n');
+                }
+                LineType::Start => {
+                    gutter.push_str(&line_number_display.to_line().to_string());
+                    line_number_display += 1;
+                    gutter.push('\n');
+                }
+                LineType::Between => {
+                    gutter.push_str(" \n");
+                }
+                LineType::End => {
+                    gutter.push_str(" \n");
+                }
+                LineType::Empty => {
+                    gutter.push_str(&line_number_display.to_string());
+                    line_number_display += 1;
+                    gutter.push('\n');
+                }
+            }
+        }
+        gutter
+    }
+    fn get_display_content(&self) -> Vec<Line> {
+        let mut visible_lines = Vec::with_capacity(self.lines.len());
+        let mut offset = 0;
+        if self.row_number >= self.window_width {
+            offset = self.row_number - self.window_width + 1;
+        }
+        for line in self.lines.iter() {
+            match line.line_type {
+                LineType::Empty => {
+                    visible_lines.push(Line::from(""));
+                }
+                _ => {
+                    let line = Line::from(
+                        &self.buffer
+                            [line.start_in_buffer + offset..line.start_in_buffer + line.length],
+                    );
+                    visible_lines.push(line);
+                }
+            }
+        }
+        visible_lines
+    }
+    fn delete_char(&mut self) {}
+    fn undo(&mut self) {}
+    fn redo(&mut self) {}
+    fn insert_char(&mut self, new_content: char) {
+        self.piece_tree.insert_char(new_content, self.index);
+        self.index += 1;
+        self.refresh_content();
+        self.compute_row_and_col_from_index();
+    }
     fn insert(&mut self, new_content: &str) {
+        let previous_lf_count = self.piece_tree.get_line_feed_count();
         self.piece_tree.insert(new_content, self.index);
+        let current_lf_count = self.piece_tree.get_line_feed_count();
+        let new_lines_count = current_lf_count - previous_lf_count;
         self.index += new_content.len();
+        let new_top_line = get_new_top_line(
+            self.start_line_number as i32,
+            self.window_height as i32,
+            (self.start_line_number + self.row_number + new_lines_count) as i32,
+            0,
+        );
+        if new_top_line != self.start_line_number {
+            self.start_index = self.piece_tree.get_start_offset_of_a_line(new_top_line);
+            self.start_line_number = new_top_line;
+        }
+        self.refresh_content();
+        self.compute_row_and_col_from_index();
+    }
+    fn refresh_content(&mut self) {
         self.buffer.clear();
         self.piece_tree.get_lines_text(
             self.start_line_number,
-            self.window_height + 1,
+            self.window_height,
             &mut self.buffer,
         );
         compute_line_starts(&self.buffer, &mut self.lines);
     }
-    fn compute_row_and_col_from_index(&mut self,previous_number_of_lf:usize) {
+    fn compute_index_from_row_and_col(&mut self) {
+        let mut sum = 0;
+        for line in self.lines.iter().take(self.row_number) {
+            match line.line_type {
+                LineType::Independent => {
+                    sum += line.length + 1;
+                }
+                LineType::Start => {
+                    sum += line.length;
+                }
+                LineType::Between => {
+                    sum -= line.length;
+                }
+                LineType::End => {
+                    sum += line.length + 1;
+                }
+                LineType::Empty => {
+                    sum += line.length;
+                }
+            }
+        }
+        sum += self.column_number;
+        self.index = sum + self.start_index;
+    }
+    fn compute_row_and_col_from_index(&mut self) {
         let mut remainder = self.index - self.start_index;
-        let mut rows=0;
-        for (i, line) in self.lines.iter().enumerate() {
+        let mut rows = 0;
+        for line in self.lines.iter() {
             if remainder > line.length {
                 match line.line_type {
                     LineType::Independent => {
@@ -287,21 +416,40 @@ impl App {
                     LineType::Between => {
                         remainder -= line.length;
                     }
-                    LineType::End => { 
-                        remainder -= line.length+1;
-                    },
+                    LineType::End => {
+                        remainder -= line.length + 1;
+                    }
+                    LineType::Empty => {
+                        remainder -= line.length;
+                    }
                 }
-                rows +=1;
-            }else{
-                self.row_number =rows;
+                rows += 1;
+            } else {
+                self.row_number = rows;
                 self.column_number = remainder;
                 return;
             }
         }
     }
 }
-fn compute_line_starts(buf: &str, lines: &mut Vec<TextEditorLine>) {
+fn get_new_top_line(
+    top_line_old: i32,
+    window_height: i32,
+    cursor_line_new: i32,
+    scroll_off: i32,
+) -> usize {
+    let min_top = cursor_line_new - window_height + 1 + scroll_off;
+    let max_top = cursor_line_new - scroll_off;
+    let top_line_new = max(min_top, min(top_line_old, max_top));
+    (max(0, top_line_new)) as usize
+}
+pub fn compute_line_starts(buf: &str, lines: &mut Vec<TextEditorLine>) {
     if buf.is_empty() {
+        lines.push(TextEditorLine {
+            start_in_buffer: 0,
+            length: 0,
+            line_type: LineType::Empty,
+        });
         return;
     }
     lines.clear();
@@ -325,7 +473,16 @@ fn compute_line_starts(buf: &str, lines: &mut Vec<TextEditorLine>) {
         if i + 1 < lines.len() {
             lines[i].length = lines[i + 1].start_in_buffer - lines[i].start_in_buffer - 1;
         } else {
-            lines[i].length = buf.len() - lines[i].start_in_buffer;
+            if buf.as_bytes()[buf.len() - 1] == b'\n' {
+                lines[i].length = buf.len() - lines[i].start_in_buffer - 1;
+                lines.push(TextEditorLine {
+                    start_in_buffer: i + 1,
+                    length: 0,
+                    line_type: LineType::Empty,
+                });
+            } else {
+                lines[i].length = buf.len() - lines[i].start_in_buffer;
+            }
         }
     }
 }
@@ -344,9 +501,10 @@ enum LineType {
     Start,
     Between,
     End,
+    Empty,
 }
 #[derive(Debug)]
-struct TextEditorLine {
+pub struct TextEditorLine {
     start_in_buffer: usize,
     length: usize,
     line_type: LineType,

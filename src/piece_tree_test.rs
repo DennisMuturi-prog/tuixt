@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::piece_tree::PieceTree;
+    use crate::{ piece_tree::{ PieceTree}};
 
     // ------------------------------------------------------------
     // Test helpers
@@ -1461,5 +1461,5 @@ mod tests {
                 );
             }
         }
-    }
+    } 
 }
