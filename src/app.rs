@@ -223,7 +223,7 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.insert_char('y');
+                                self.insert_char('z');
                             }
                         }
                         KeyCode::Char('y') => {

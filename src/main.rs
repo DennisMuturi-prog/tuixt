@@ -14,7 +14,7 @@ fn main() -> io::Result<()> {
     };
     let mut app = App::new(
         "",
-        5,
+        (initial_window_height-6) as usize,
         initial_window_width as usize,
         false,
     );
