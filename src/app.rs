@@ -91,7 +91,7 @@ impl App {
         frame.render_widget(title, chunks[0]);
         let text_section = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(3), Constraint::Min(1)])
+            .constraints([Constraint::Length(5), Constraint::Min(1)])
             .split(chunks[1]);
 
         let line_numbers = Paragraph::new(self.get_line_numbers_gutter())
