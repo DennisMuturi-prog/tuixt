@@ -31,6 +31,7 @@ pub struct App {
     wrap: bool,
     window_height: usize,
     window_width: usize,
+    line_column: usize,
 }
 
 impl App {
@@ -100,7 +101,7 @@ impl App {
         let text_content = Paragraph::new(self.get_display_content());
         frame.render_widget(text_content, text_section[1]);
         frame.render_widget(line_numbers, text_section[0]);
-        if matches!(self.mode,Mode::Editing | Mode::Normal){
+        if matches!(self.mode, Mode::Editing | Mode::Normal) {
             frame.set_cursor_position(Position::new(
                 // Draw the cursor at the current position in the input field.
                 // This position is can be controlled via the left and right arrow key
@@ -128,7 +129,7 @@ impl App {
             Span::styled(
                 format!(
                     "column {} row {} index:{}",
-                    self.column_number,
+                    self.line_column,
                     self.row_number + self.start_line_number + 1,
                     self.index
                 ),
@@ -268,6 +269,24 @@ impl App {
                             self.index = min(content_len, self.index + 1);
                             self.compute_row_and_col_from_index();
                         }
+                        KeyCode::PageDown => {
+                            if self.row_number + 1 >= self.window_height
+                                && self.column_number + 1 >= self.lines[self.row_number].length()
+                            {
+                                let total_lines = self.piece_tree.get_line_feed_count() + 1;
+                                if self.start_line_number + self.row_number + 1 < total_lines {
+                                    self.start_line_number += 1;
+                                    self.start_index = self
+                                        .piece_tree
+                                        .get_start_offset_of_a_line(self.start_line_number);
+                                    self.refresh_content();
+                                }
+                            }
+
+                            let content_len = self.piece_tree.get_tree_len();
+                            self.index = min(content_len, self.index + 1);
+                            self.compute_row_and_col_from_index();
+                        }
                         KeyCode::Up => {
                             if self.row_number == 0 {
                                 if (self.start_line_number as i32 - 1) >= 0 {
@@ -346,21 +365,26 @@ impl App {
     }
     fn get_display_content(&self) -> Vec<Line> {
         let mut visible_lines = Vec::with_capacity(self.lines.len());
-        let mut offset = 0;
-        if self.row_number >= self.window_width {
-            offset = self.row_number - self.window_width + 1;
-        }
+        let offset = if self.line_column < self.window_width {
+            0
+        } else {
+            self.line_column - self.window_width + 1
+        };
         for line in self.lines.iter() {
             match line.line_type {
                 LineType::Empty => {
                     visible_lines.push(Line::from(""));
                 }
                 _ => {
-                    let line = Line::from(
-                        &self.buffer
-                            [line.start_in_buffer + offset..line.start_in_buffer + line.length],
-                    );
-                    visible_lines.push(line);
+                    let end_offset = line.start_in_buffer + line.length;
+                    let start_offset = line.start_in_buffer + offset;
+                    let visible_end_offset = min(end_offset,start_offset + self.window_width);
+                    if start_offset >= end_offset {
+                        visible_lines.push(Line::from(""));
+                    } else {
+                        let line = Line::from(&self.buffer[start_offset..visible_end_offset]);
+                        visible_lines.push(line);
+                    }
                 }
             }
         }
@@ -452,7 +476,8 @@ impl App {
                 rows += 1;
             } else {
                 self.row_number = rows;
-                self.column_number = remainder;
+                self.line_column = remainder;
+                self.column_number = min(self.window_width - 1, remainder);
                 return;
             }
         }
