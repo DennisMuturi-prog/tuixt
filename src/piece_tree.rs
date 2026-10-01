@@ -132,23 +132,24 @@ impl PieceTree {
             }
         }
     }
-    fn node_at_start_of_line(
+
+    fn node_at_start_of_line<'a>(
         &self,
-        root: &Rc<Node>,
+        root: &'a Node,
         line_number: usize,
         content: &mut String,
-    ) -> LineDescent {
+    ) -> LineDescent<'a> {
         let mut line_number = line_number;
         let mut current_node = root;
-        let mut path: Vec<Rc<Node>> = Vec::new();
+        let mut path = Vec::new();
 
-        let black_leaf = &self.black_leaf;
+        let black_leaf = self.black_leaf.deref();
         if line_number == 0 {
-            let mut dest = current_node.clone();
+            let mut dest = current_node;
             while current_node != black_leaf {
-                path.push(current_node.clone());
-                dest = current_node.clone();
-                current_node = current_node.left.as_ref().unwrap();
+                path.push(current_node);
+                dest = current_node;
+                current_node = current_node.left.as_ref().unwrap().deref();
             }
             let buffer = match dest.buffer_type {
                 BufferType::Original => &self.original,
@@ -181,7 +182,7 @@ impl PieceTree {
             }
         }
         while current_node != black_leaf {
-            path.push(current_node.clone());
+            path.push(current_node);
             if line_number <= current_node.left_subtree_line_feed_count {
                 current_node = current_node.left.as_ref().unwrap();
             } else if current_node.left_subtree_line_feed_count + current_node.line_feed_count
@@ -232,6 +233,7 @@ impl PieceTree {
             path,
         }
     }
+
     pub fn get_start_offset_of_a_line(&self, line_number: usize) -> usize {
         if line_number == 0 {
             return 0;
@@ -533,14 +535,15 @@ impl PieceTree {
             buffer_type: dest.buffer_type,
         }
     }
-    fn node_at(&self, root: &Rc<Node>, offset: usize) -> NodePosition {
+
+    fn node_at<'a>(&self, root: &'a Node, offset: usize) -> NodePosition<'a> {
         let mut offset = offset;
         let mut start_offset = 0;
         let mut current_node = root;
-        let mut path: Vec<Rc<Node>> = Vec::new();
-        let black_leaf = &self.black_leaf;
+        let mut path = Vec::new();
+        let black_leaf = self.black_leaf.deref();
         while current_node != black_leaf {
-            path.push(current_node.clone());
+            path.push(current_node);
             if offset < current_node.left_subtree_len {
                 current_node = current_node.left.as_ref().unwrap();
             } else if current_node.left_subtree_len + current_node.length >= offset {
@@ -812,7 +815,6 @@ impl PieceTree {
             buffer_type: node.buffer_type,
         }
     }
-
     pub fn delete(&mut self, offset: usize, length: usize) {
         if length == 0 {
             return;
@@ -829,11 +831,12 @@ impl PieceTree {
                 self.root = None;
                 return;
             }
-            let mut start_node_pos = self.node_at(&root_node, offset);
-            let end_node_pos = self.node_at(&root_node, offset + length);
+
+            let root_node_deref = root_node.deref();
+            let mut start_node_pos = self.node_at(root_node_deref, offset);
+            let end_node_pos = self.node_at(root_node_deref, offset + length);
             let start_piece = Self::last(&start_node_pos.path);
             let end_piece = Self::last(&end_node_pos.path);
-            let root_node_deref = root_node.deref();
             if start_piece == end_piece {
                 if start_node_pos.remainder == 0 && end_node_pos.remainder == start_piece.length {
                     let new_root = self.delete_at(root_node_deref, offset);
@@ -841,25 +844,23 @@ impl PieceTree {
                 } else if start_node_pos.remainder == 0
                     && end_node_pos.remainder < start_piece.length
                 {
-                    let suffix = self.shrink_piece_to_suffix(&start_piece, end_node_pos.remainder);
+                    let suffix = self.shrink_piece_to_suffix(start_piece, end_node_pos.remainder);
                     let new_root =
                         Self::replace_at(root_node_deref, start_node_pos.start_offset, suffix);
                     self.root = Some(new_root);
                 } else if start_node_pos.remainder > 0
                     && end_node_pos.remainder == start_piece.length
                 {
-                    let prefix =
-                        self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
+                    let prefix = self.shrink_piece_to_prefix(start_piece, start_node_pos.remainder);
                     let new_root =
                         Self::replace_at(root_node_deref, start_node_pos.start_offset, prefix);
                     self.root = Some(new_root);
                 } else {
-                    let prefix =
-                        self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
+                    let prefix = self.shrink_piece_to_prefix(start_piece, start_node_pos.remainder);
                     let new_root =
                         Self::replace_at(root_node_deref, start_node_pos.start_offset, prefix);
                     let suffix_info =
-                        self.shrink_piece_to_suffix(&start_piece, end_node_pos.remainder);
+                        self.shrink_piece_to_suffix(start_piece, end_node_pos.remainder);
                     let suffix = Rc::new(Node::new(
                         suffix_info.start,
                         suffix_info.end,
@@ -878,9 +879,9 @@ impl PieceTree {
                     self.root = Some(self.blacken(new_root));
                 }
             } else {
-                let left = self.shrink_piece_to_prefix(&start_piece, start_node_pos.remainder);
+                let left = self.shrink_piece_to_prefix(start_piece, start_node_pos.remainder);
 
-                let right = self.shrink_piece_to_suffix(&end_piece, end_node_pos.remainder);
+                let right = self.shrink_piece_to_suffix(end_piece, end_node_pos.remainder);
                 let mut between: Vec<usize> = Vec::new();
                 let path = &mut start_node_pos.path;
                 let mut at = start_node_pos.start_offset + start_piece.length;
@@ -909,27 +910,25 @@ impl PieceTree {
             self.redo_stack.clear();
         }
     }
-    fn last(path: &[Rc<Node>]) -> Rc<Node> {
-        path[path.len() - 1].clone()
-    }
-    fn last_2<'a>(path: &[&'a Node]) -> &'a Node {
+
+    fn last<'a>(path: &[&'a Node]) -> &'a Node {
         path[path.len() - 1]
     }
-    fn next_2(&self, path: &mut Vec<&Node>) -> bool {
-        let mut node = Self::last_2(path);
+    fn next(&self, path: &mut Vec<&Node>) -> bool {
+        let mut node = Self::last(path);
         let right = node.right.as_ref().unwrap().deref();
         let black_leaf = self.black_leaf.deref();
         if right != black_leaf {
             let mut n = right;
             while n != black_leaf {
                 path.push(n);
-                n = node.right.as_ref().unwrap().deref();
+                n = n.left.as_ref().unwrap().deref();
             }
             return true;
         }
         while path.len() > 1 {
             path.pop();
-            let parent = Self::last_2(path);
+            let parent = Self::last(path);
             if parent.left.as_ref().unwrap().deref() == node {
                 return true;
             }
@@ -938,28 +937,7 @@ impl PieceTree {
 
         false
     }
-    fn next(&self, path: &mut Vec<Rc<Node>>) -> bool {
-        let mut node = Self::last(path);
-        let right = node.right.clone().unwrap();
-        if right != self.black_leaf {
-            let mut n = right;
-            while n != self.black_leaf {
-                path.push(n.clone());
-                n = n.left.clone().unwrap();
-            }
-            return true;
-        }
-        while path.len() > 1 {
-            path.pop();
-            let parent = Self::last(path);
-            if parent.left.clone().unwrap() == node {
-                return true;
-            }
-            node = parent;
-        }
 
-        false
-    }
     fn replace_at(current_node: &Node, offset: usize, node_that_replaces: NodeInfo) -> Rc<Node> {
         if offset < current_node.left_subtree_len {
             let left_path = Self::replace_at(
@@ -1057,15 +1035,16 @@ impl PieceTree {
     pub fn insert_char(&mut self, content: char, offset: usize) {
         if let Some(root_node) = self.root.take() {
             self.undo_stack.push(Some(root_node.clone()));
-            let node_to_insert = self.pre_insert_char(content);
-            let node_position = self.node_at(&root_node, offset);
-            let piece = Self::last(&node_position.path);
+
             let root_node_deref = root_node.deref();
+            let node_to_insert = self.pre_insert_char(content);
+            let node_position = self.node_at(root_node_deref, offset);
+            let piece = Self::last(&node_position.path);
             if piece.end == self.last_change_in_buffer
                 && node_position.start_offset + piece.length == offset
                 && piece.buffer_type == BufferType::Add
             {
-                let replacement = self.expand_piece(&piece, content.len_utf8());
+                let replacement = self.expand_piece(piece, content.len_utf8());
                 self.last_change_in_buffer = replacement.end;
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, replacement);
@@ -1076,10 +1055,10 @@ impl PieceTree {
             if node_position.start_offset + piece.length > offset
                 && offset != node_position.start_offset
             {
-                let first_part = self.shrink_piece_to_prefix(&piece, node_position.remainder);
+                let first_part = self.shrink_piece_to_prefix(piece, node_position.remainder);
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, first_part);
-                let second_part_info = self.shrink_piece_to_suffix(&piece, node_position.remainder);
+                let second_part_info = self.shrink_piece_to_suffix(piece, node_position.remainder);
                 let second_part = Rc::new(Node::new(
                     second_part_info.start,
                     second_part_info.end,
@@ -1108,21 +1087,23 @@ impl PieceTree {
         }
         self.redo_stack.clear();
     }
+
     pub fn insert(&mut self, content: &str, offset: usize) {
         if content.is_empty() {
             return;
         }
         if let Some(root_node) = self.root.take() {
             self.undo_stack.push(Some(root_node.clone()));
-            let node_to_insert = self.pre_insert(content);
-            let node_position = self.node_at(&root_node, offset);
-            let piece = Self::last(&node_position.path);
+
             let root_node_deref = root_node.deref();
+            let node_to_insert = self.pre_insert(content);
+            let node_position = self.node_at(root_node_deref, offset);
+            let piece = Self::last(&node_position.path);
             if piece.end == self.last_change_in_buffer
                 && node_position.start_offset + piece.length == offset
                 && piece.buffer_type == BufferType::Add
             {
-                let replacement = self.expand_piece(&piece, content.len());
+                let replacement = self.expand_piece(piece, content.len());
                 self.last_change_in_buffer = replacement.end;
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, replacement);
@@ -1133,10 +1114,10 @@ impl PieceTree {
             if node_position.start_offset + piece.length > offset
                 && offset != node_position.start_offset
             {
-                let first_part = self.shrink_piece_to_prefix(&piece, node_position.remainder);
+                let first_part = self.shrink_piece_to_prefix(piece, node_position.remainder);
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, first_part);
-                let second_part_info = self.shrink_piece_to_suffix(&piece, node_position.remainder);
+                let second_part_info = self.shrink_piece_to_suffix(piece, node_position.remainder);
                 let second_part = Rc::new(Node::new(
                     second_part_info.start,
                     second_part_info.end,
@@ -1165,6 +1146,7 @@ impl PieceTree {
         }
         self.redo_stack.clear();
     }
+
     fn blacken(&self, node: Rc<Node>) -> Rc<Node> {
         Rc::new(Node::new(
             node.start,
@@ -1693,14 +1675,15 @@ impl Color {
         }
     }
 }
-struct NodePosition {
+struct NodePosition<'a> {
     start_offset: usize,
     remainder: usize,
-    path: Vec<Rc<Node>>,
+    path: Vec<&'a Node>,
 }
-struct LineDescent {
+
+struct LineDescent<'a> {
     should_continue: bool,
-    path: Vec<Rc<Node>>,
+    path: Vec<&'a Node>,
 }
 fn find_line_starts(content: &str, offset: usize, line_starts: &mut Vec<usize>) {
     let mut i = 0;
