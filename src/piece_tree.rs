@@ -146,7 +146,7 @@ impl PieceTree {
         let black_leaf = self.black_leaf.deref();
         if line_number == 0 {
             let mut dest = current_node;
-            while current_node != black_leaf {
+            while !std::ptr::eq(current_node, black_leaf) {
                 path.push(current_node);
                 dest = current_node;
                 current_node = current_node.left.as_ref().unwrap().deref();
@@ -181,7 +181,7 @@ impl PieceTree {
                 };
             }
         }
-        while current_node != black_leaf {
+        while !std::ptr::eq(current_node, black_leaf) {
             path.push(current_node);
             if line_number <= current_node.left_subtree_line_feed_count {
                 current_node = current_node.left.as_ref().unwrap();
@@ -253,7 +253,7 @@ impl PieceTree {
         let mut current_node = root;
         let mut start_offset = 0;
         let black_leaf = self.black_leaf.deref();
-        while current_node != black_leaf {
+        while !std::ptr::eq(current_node, black_leaf) {
             if line_number <= current_node.left_subtree_line_feed_count {
                 current_node = current_node.left.as_ref().unwrap();
             } else if current_node.left_subtree_line_feed_count + current_node.line_feed_count
@@ -300,7 +300,7 @@ impl PieceTree {
         start_line_num: usize,
         num_of_lines: usize,
     ) {
-        if current_node == self.black_leaf.deref() {
+        if std::ptr::eq(current_node, self.black_leaf.deref()) {
             return;
         }
         let mut start_line_num = start_line_num;
@@ -386,7 +386,7 @@ impl PieceTree {
         index: usize,
         length: usize,
     ) {
-        if current_node == self.black_leaf.deref() {
+        if std::ptr::eq(current_node, self.black_leaf.deref()) {
             return;
         }
         let mut index = index;
@@ -460,7 +460,7 @@ impl PieceTree {
     }
 
     fn in_order_traversal(&self, node: &Node, content: &mut String) {
-        if node == self.black_leaf.deref() {
+        if std::ptr::eq(node, self.black_leaf.deref()) {
             return;
         }
         self.in_order_traversal(node.left.as_ref().unwrap(), content);
@@ -480,9 +480,9 @@ impl PieceTree {
         self.in_order_traversal(node.right.as_ref().unwrap(), content);
     }
     fn remove_right_most(&self, node: &Node) -> Rc<Node> {
-        if node.right.as_ref().unwrap() == &self.black_leaf {
+        if Rc::ptr_eq(node.right.as_ref().unwrap(), &self.black_leaf) {
             let left = node.left.as_ref().unwrap().clone();
-            if left == self.black_leaf {
+            if Rc::ptr_eq(&left, &self.black_leaf) {
                 if node.color == Color::Black {
                     return self.double_black_leaf.clone();
                 } else {
@@ -523,7 +523,7 @@ impl PieceTree {
         let mut current = node;
         let mut dest = current;
         let black_leaf = self.black_leaf.deref();
-        while current != black_leaf {
+        while !std::ptr::eq(current, black_leaf) {
             dest = current;
             current = current.right.as_ref().unwrap();
         }
@@ -542,7 +542,7 @@ impl PieceTree {
         let mut current_node = root;
         let mut path = Vec::new();
         let black_leaf = self.black_leaf.deref();
-        while current_node != black_leaf {
+        while !std::ptr::eq(current_node, black_leaf) {
             path.push(current_node);
             if offset < current_node.left_subtree_len {
                 current_node = current_node.left.as_ref().unwrap();
@@ -566,7 +566,7 @@ impl PieceTree {
         }
     }
     fn insert_at(&self, current_node: &Node, offset: usize, node_to_insert: Rc<Node>) -> Rc<Node> {
-        if current_node == self.black_leaf.deref() {
+        if std::ptr::eq(current_node, self.black_leaf.deref()) {
             return node_to_insert;
         }
         if offset <= current_node.left_subtree_len {
@@ -639,7 +639,7 @@ impl PieceTree {
         let left = node.left.as_ref().unwrap();
         let right = node.right.as_ref().unwrap();
         let black_leaf = &self.black_leaf;
-        if left != black_leaf && right != black_leaf {
+        if !Rc::ptr_eq(left, black_leaf) && !Rc::ptr_eq(right, black_leaf) {
             let node_info = self.find_right_most(left);
             let new_left = self.remove_right_most(left);
             let new_node = Rc::new(Node::new(
@@ -653,7 +653,7 @@ impl PieceTree {
                 Some(right.clone()),
             ));
             self.bubble(new_node)
-        } else if left == black_leaf && right == black_leaf {
+        } else if Rc::ptr_eq(left, black_leaf) && Rc::ptr_eq(right, black_leaf) {
             match node.color {
                 Color::NegativeBlack => self.black_leaf.clone(),
                 Color::Red => self.black_leaf.clone(),
@@ -661,7 +661,7 @@ impl PieceTree {
                 Color::DoubleBlack => self.double_black_leaf.clone(),
             }
         } else {
-            if right == black_leaf {
+            if Rc::ptr_eq(right, black_leaf) {
                 if node.color == Color::Black {
                     Rc::new(Node::new(
                         left.start,
@@ -837,7 +837,7 @@ impl PieceTree {
             let end_node_pos = self.node_at(root_node_deref, offset + length);
             let start_piece = Self::last(&start_node_pos.path);
             let end_piece = Self::last(&end_node_pos.path);
-            if start_piece == end_piece {
+            if std::ptr::eq(start_piece, end_piece) {
                 if start_node_pos.remainder == 0 && end_node_pos.remainder == start_piece.length {
                     let new_root = self.delete_at(root_node_deref, offset);
                     self.root = Some(self.blacken(new_root));
@@ -885,7 +885,7 @@ impl PieceTree {
                 let mut between: Vec<usize> = Vec::new();
                 let path = &mut start_node_pos.path;
                 let mut at = start_node_pos.start_offset + start_piece.length;
-                while self.next(path) && Self::last(path) != end_piece {
+                while self.next(path) && !std::ptr::eq(Self::last(path), end_piece) {
                     between.push(at);
                     at += Self::last(path).length;
                 }
@@ -918,9 +918,9 @@ impl PieceTree {
         let mut node = Self::last(path);
         let right = node.right.as_ref().unwrap().deref();
         let black_leaf = self.black_leaf.deref();
-        if right != black_leaf {
+        if !std::ptr::eq(right, black_leaf) {
             let mut n = right;
-            while n != black_leaf {
+            while !std::ptr::eq(n, black_leaf) {
                 path.push(n);
                 n = n.left.as_ref().unwrap().deref();
             }
@@ -929,7 +929,7 @@ impl PieceTree {
         while path.len() > 1 {
             path.pop();
             let parent = Self::last(path);
-            if parent.left.as_ref().unwrap().deref() == node {
+            if std::ptr::eq(parent.left.as_ref().unwrap().deref(), node) {
                 return true;
             }
             node = parent;
@@ -1378,10 +1378,10 @@ impl PieceTree {
         z
     }
     fn redder(&self, node: &Rc<Node>) -> Rc<Node> {
-        if node == &self.black_leaf {
+        if Rc::ptr_eq(node, &self.black_leaf) {
             return self.black_leaf.clone();
         }
-        if node == &self.double_black_leaf {
+        if Rc::ptr_eq(node, &self.double_black_leaf) {
             return self.black_leaf.clone();
         }
 
@@ -1754,7 +1754,7 @@ impl PieceTree {
         line_end: usize,
         span: &mut LineSpan,
     ) {
-        if node == &self.black_leaf {
+        if Rc::ptr_eq(node, &self.black_leaf) {
             return;
         }
         let left_region = if is_root { 1 } else { region };
@@ -1862,5 +1862,86 @@ impl PieceTree {
         }
 
         left_black_height + if node.color == Color::Black { 1 } else { 0 }
+    }
+}
+
+// ============================================================================
+// Tests for node identity.
+//
+// The tree shares immutable nodes and rebuilds them constantly (e.g. `blacken`
+// always allocates a fresh node), so two *distinct* nodes can compare equal
+// field-by-field. Successor traversal and deletion must therefore identify
+// nodes by pointer, not by structural equality. These tests build trees whose
+// children are structurally identical but distinct to pin that down.
+// ============================================================================
+
+#[cfg(test)]
+mod pointer_identity_tests {
+    use super::*;
+
+    fn leaf(tree: &PieceTree) -> Rc<Node> {
+        Rc::new(Node::new(
+            BufferPosition { line: 0, column: 0 },
+            BufferPosition { line: 0, column: 1 },
+            0,
+            1,
+            BufferType::Original,
+            Color::Black,
+            Some(tree.black_leaf.clone()),
+            Some(tree.black_leaf.clone()),
+        ))
+    }
+
+    fn branch(_tree: &PieceTree, left: Rc<Node>, right: Rc<Node>) -> Rc<Node> {
+        Rc::new(Node::new(
+            BufferPosition::default(),
+            BufferPosition::default(),
+            0,
+            0,
+            BufferType::Original,
+            Color::Black,
+            Some(left),
+            Some(right),
+        ))
+    }
+
+    #[test]
+    fn next_reports_no_successor_for_structural_twin_right_child() {
+        let tree = PieceTree::new("");
+        let left = leaf(&tree);
+        let right = leaf(&tree);
+        let parent = branch(&tree, left, right.clone());
+
+        // `right` is the right child of `parent` (which has no right subtree),
+        // so it has no in-order successor. `left` is a structural twin of
+        // `right`, which must not be mistaken for it.
+        let mut path: Vec<&Node> = vec![parent.deref(), right.deref()];
+
+        assert!(
+            !tree.next(&mut path),
+            "the right child of `parent` has no in-order successor, but `next` \
+             matched the structurally-equal left child on the way up"
+        );
+    }
+
+    #[test]
+    fn next_ascends_to_the_real_ancestor_not_a_structural_twin() {
+        let tree = PieceTree::new("");
+        let left = leaf(&tree);
+        let right = leaf(&tree);
+        let parent = branch(&tree, left, right.clone());
+        let sibling = leaf(&tree);
+        let grandparent = branch(&tree, parent.clone(), sibling);
+
+        // `right` is the right child of `parent`; `parent` is the left child of
+        // `grandparent`, so the successor of `right` is `grandparent`. The
+        // structurally-equal `left` must not be treated as `right`.
+        let mut path: Vec<&Node> = vec![grandparent.deref(), parent.deref(), right.deref()];
+
+        assert!(tree.next(&mut path));
+        assert!(
+            std::ptr::eq(PieceTree::last(&path), grandparent.deref()),
+            "successor must be `grandparent`, not the structurally-equal `parent`"
+        );
     }
 }
