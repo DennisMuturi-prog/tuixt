@@ -91,10 +91,10 @@ impl PieceTree {
     }
     pub fn get_sub_text(&self, content: &mut String, start_index: usize, length: usize) {
         if let Some(root_node) = self.root.as_ref() {
-            if start_index>= root_node.subtree_len {
+            if start_index >= root_node.subtree_len {
                 return;
             }
-            let length = length.min(root_node.subtree_len-start_index);
+            let length = length.min(root_node.subtree_len - start_index);
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
     }
@@ -551,7 +551,19 @@ impl PieceTree {
             if offset < current_node.left_subtree_len {
                 current_node = current_node.left.as_ref().unwrap();
             } else if current_node.left_subtree_len + current_node.length >= offset {
-                let offset_in_node = offset - current_node.left_subtree_len;
+                let mut offset_in_node = offset - current_node.left_subtree_len;
+                let buffer = match current_node.buffer_type {
+                    BufferType::Original => &self.original,
+                    BufferType::Add => &self.add,
+                };
+                let line_starts = match current_node.buffer_type {
+                    BufferType::Original => &self.original_line_starts,
+                    BufferType::Add => &self.add_line_starts,
+                };
+                let mut boundary = line_starts[current_node.start.line]
+                    + current_node.start.column
+                    + offset_in_node;
+
                 return NodePosition {
                     start_offset: start_offset + current_node.left_subtree_len,
                     remainder: offset_in_node,
