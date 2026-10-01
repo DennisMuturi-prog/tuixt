@@ -1074,6 +1074,52 @@ mod tests {
     }
 
     // ============================================================
+    // Regression: non-UTF-8-boundary byte offsets must not panic
+    // ============================================================
+
+    #[test]
+    fn sub_text_mid_char_offsets_do_not_panic() {
+        // 2-byte chars: α=0..2, β=2..4, γ=4..6, δ=6..8
+        let two = PieceTree::new("αβγδ");
+        assert_eq!(sub_text(&two, 1, 1), "α");
+        assert_eq!(sub_text(&two, 1, 2), "αβ");
+        assert_eq!(sub_text(&two, 3, 1), "β");
+
+        // 3-byte chars: 你=0..3, 好=3..6
+        let three = PieceTree::new("你好");
+        assert_eq!(sub_text(&three, 1, 1), "你");
+        assert_eq!(sub_text(&three, 4, 1), "好");
+
+        // 4-byte chars: 🦀=0..4, 🚀=4..8
+        let four = PieceTree::new("🦀🚀");
+        assert_eq!(sub_text(&four, 2, 1), "🦀");
+        assert_eq!(sub_text(&four, 5, 1), "🚀");
+    }
+
+    #[test]
+    fn sub_text_mid_char_offsets_across_pieces_do_not_panic() {
+        let mut tree = PieceTree::new("αβγδ");
+        tree.insert("x", 4); // "αβxγδ"
+        assert_eq!(sub_text(&tree, 1, 3), "αβx");
+    }
+
+    #[test]
+    fn insert_at_mid_char_offset_keeps_valid_utf8() {
+        let mut tree = PieceTree::new("αβγδ");
+        tree.insert("x", 1); // byte 1 is inside 'α' -> must snap to 0
+        assert_eq!(text(&tree), "xαβγδ");
+        assert_eq!(line_text(&tree, 0), "xαβγδ");
+    }
+
+    #[test]
+    fn delete_at_mid_char_offset_keeps_valid_utf8() {
+        let mut tree = PieceTree::new("αβγδ");
+        tree.delete(1, 1); // [1,2) is inside 'α' -> snap to [0,2), delete "α"
+        assert_eq!(text(&tree), "βγδ");
+        assert_eq!(line_text(&tree, 0), "βγδ");
+    }
+
+    // ============================================================
     // Regression: red-black tree panics
     // ============================================================
 
