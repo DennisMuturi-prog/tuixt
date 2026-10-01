@@ -33,8 +33,8 @@ pub struct App {
     window_width: usize,
     line_column: usize,
     col_hint: usize,
-    start_of_line:usize,
-    end_of_line:usize
+    start_of_line: usize,
+    end_of_line: usize,
 }
 
 impl App {
@@ -227,18 +227,20 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.insert_char('z');
+                                self.insert("z");
                             }
                         }
                         KeyCode::Char('y') => {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
-                                self.insert_char('y');
+                                self.insert("y");
                             }
                         }
                         KeyCode::Char(value) => {
-                            self.insert_char(value);
+                            let mut buf = [0u8; 4];
+                            let s = value.encode_utf8(&mut buf);
+                            self.insert(s);
                         }
                         KeyCode::Left => {
                             if self.row_number == 0
@@ -403,12 +405,6 @@ impl App {
     fn delete_char(&mut self) {}
     fn undo(&mut self) {}
     fn redo(&mut self) {}
-    fn insert_char(&mut self, new_content: char) {
-        self.piece_tree.insert_char(new_content, self.index);
-        self.index += 1;
-        self.refresh_content();
-        self.compute_row_and_col_from_index(CursorMovementDirection::Right);
-    }
     fn insert(&mut self, new_content: &str) {
         let previous_lf_count = self.piece_tree.get_line_feed_count();
         self.piece_tree.insert(new_content, self.index);
@@ -492,8 +488,8 @@ impl App {
                         self.column_number = remainder % self.window_width;
                     }
                     CursorMovementDirection::Right => {
-                        self.column_number = min(self.window_width,remainder);
-                    },
+                        self.column_number = min(self.window_width, remainder);
+                    }
                 }
                 self.col_hint = remainder;
                 return;

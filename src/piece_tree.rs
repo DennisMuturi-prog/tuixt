@@ -1011,82 +1011,6 @@ impl PieceTree {
             Some(self.black_leaf.clone()),
         ))
     }
-    fn pre_insert_char(&mut self, content: char) -> Rc<Node> {
-        let start = BufferPosition {
-            line: self.add_line_starts.len() - 1,
-            column: self.add.len() - self.add_line_starts[self.add_line_starts.len() - 1],
-        };
-        self.add.push(content);
-        let end = BufferPosition {
-            line: self.add_line_starts.len() - 1,
-            column: self.add.len() - self.add_line_starts[self.add_line_starts.len() - 1],
-        };
-        Rc::new(Node::new(
-            start,
-            end,
-            0,
-            content.len_utf8(),
-            BufferType::Add,
-            Color::Red,
-            Some(self.black_leaf.clone()),
-            Some(self.black_leaf.clone()),
-        ))
-    }
-    pub fn insert_char(&mut self, content: char, offset: usize) {
-        if let Some(root_node) = self.root.take() {
-            self.undo_stack.push(Some(root_node.clone()));
-
-            let root_node_deref = root_node.deref();
-            let node_to_insert = self.pre_insert_char(content);
-            let node_position = self.node_at(root_node_deref, offset);
-            let piece = Self::last(&node_position.path);
-            if piece.end == self.last_change_in_buffer
-                && node_position.start_offset + piece.length == offset
-                && piece.buffer_type == BufferType::Add
-            {
-                let replacement = self.expand_piece(piece, content.len_utf8());
-                self.last_change_in_buffer = replacement.end;
-                let new_root =
-                    Self::replace_at(root_node_deref, node_position.start_offset, replacement);
-                self.root = Some(self.blacken(new_root));
-                self.redo_stack.clear();
-                return;
-            }
-            if node_position.start_offset + piece.length > offset
-                && offset != node_position.start_offset
-            {
-                let first_part = self.shrink_piece_to_prefix(piece, node_position.remainder);
-                let new_root =
-                    Self::replace_at(root_node_deref, node_position.start_offset, first_part);
-                let second_part_info = self.shrink_piece_to_suffix(piece, node_position.remainder);
-                let second_part = Rc::new(Node::new(
-                    second_part_info.start,
-                    second_part_info.end,
-                    second_part_info.line_feed_count,
-                    second_part_info.length,
-                    piece.buffer_type,
-                    Color::Red,
-                    Some(self.black_leaf.clone()),
-                    Some(self.black_leaf.clone()),
-                ));
-                self.last_change_in_buffer = node_to_insert.end;
-                let new_root = self.insert_at(new_root.deref(), offset, node_to_insert);
-                let new_root =
-                    self.insert_at(new_root.deref(), offset + content.len_utf8(), second_part);
-                self.root = Some(self.blacken(new_root));
-            } else {
-                self.last_change_in_buffer = node_to_insert.end;
-                let new_root = self.insert_at(root_node_deref, offset, node_to_insert);
-                self.root = Some(self.blacken(new_root));
-            }
-        } else {
-            self.undo_stack.push(None);
-            let node_to_insert = self.pre_insert_char(content);
-            self.last_change_in_buffer = node_to_insert.end;
-            self.root = Some(self.blacken(node_to_insert));
-        }
-        self.redo_stack.clear();
-    }
 
     pub fn insert(&mut self, content: &str, offset: usize) {
         if content.is_empty() {
@@ -1148,6 +1072,9 @@ impl PieceTree {
     }
 
     fn blacken(&self, node: Rc<Node>) -> Rc<Node> {
+        if node.color == Color::Black {
+            return node;
+        }
         Rc::new(Node::new(
             node.start,
             node.end,
@@ -1470,7 +1397,7 @@ impl PieceTree {
         ))
     }
 }
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 struct Node {
     start: BufferPosition,
     end: BufferPosition,
