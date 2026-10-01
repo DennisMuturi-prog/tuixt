@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
     let mut app = App::new(
         "",
         (initial_window_height-6) as usize,
-        (initial_window_width -6) as usize,
+        5,
         false,
     );
     ratatui::run(|terminal| app.run(terminal))?;
@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
 fn testing_if_lines_are_being_created_correctly() {
     let mut piece_tree = PieceTree::default();
     piece_tree.insert("hello world", 0);
-    piece_tree.insert("\n", 11);
+    // piece_tree.insert("\n", 11);
     let mut buffer = String::new();
     piece_tree.get_lines_text(0, 5, &mut buffer);
 

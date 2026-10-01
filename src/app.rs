@@ -32,6 +32,9 @@ pub struct App {
     window_height: usize,
     window_width: usize,
     line_column: usize,
+    col_hint: usize,
+    start_of_line:usize,
+    end_of_line:usize
 }
 
 impl App {
@@ -249,7 +252,7 @@ impl App {
                                 self.refresh_content();
                             }
                             self.index = self.index.saturating_sub(1);
-                            self.compute_row_and_col_from_index();
+                            self.compute_row_and_col_from_index(CursorMovementDirection::Left);
                         }
                         KeyCode::Right => {
                             if self.row_number + 1 >= self.window_height
@@ -267,7 +270,7 @@ impl App {
 
                             let content_len = self.piece_tree.get_tree_len();
                             self.index = min(content_len, self.index + 1);
-                            self.compute_row_and_col_from_index();
+                            self.compute_row_and_col_from_index(CursorMovementDirection::Right);
                         }
                         KeyCode::PageDown => {
                             if self.row_number + 1 >= self.window_height
@@ -285,7 +288,7 @@ impl App {
 
                             let content_len = self.piece_tree.get_tree_len();
                             self.index = min(content_len, self.index + 1);
-                            self.compute_row_and_col_from_index();
+                            self.compute_row_and_col_from_index(CursorMovementDirection::Right);
                         }
                         KeyCode::Up => {
                             if self.row_number == 0 {
@@ -295,10 +298,12 @@ impl App {
                                         .piece_tree
                                         .get_start_offset_of_a_line(self.start_line_number);
                                     self.refresh_content();
+                                    self.compute_next_line_col();
                                     self.compute_index_from_row_and_col();
                                 }
                             } else {
                                 self.row_number -= 1;
+                                self.compute_next_line_col();
                                 self.compute_index_from_row_and_col();
                             }
                         }
@@ -311,10 +316,12 @@ impl App {
                                         .piece_tree
                                         .get_start_offset_of_a_line(self.start_line_number);
                                     self.refresh_content();
+                                    self.compute_next_line_col();
                                     self.compute_index_from_row_and_col();
                                 }
                             } else {
                                 self.row_number = min(self.row_number + 1, self.lines.len() - 1);
+                                self.compute_next_line_col();
                                 self.compute_index_from_row_and_col();
                             }
                         }
@@ -331,6 +338,13 @@ impl App {
             _ => (),
         }
         Ok(())
+    }
+    fn compute_next_line_col(&mut self) {
+        let previous_line_column = self.line_column;
+        self.line_column = min(self.col_hint, self.lines[self.row_number].length);
+        if self.line_column < previous_line_column {
+            self.column_number = self.line_column % self.window_width;
+        }
     }
     fn get_line_numbers_gutter(&self) -> String {
         let mut line_number_display = self.start_line_number + 1;
@@ -365,11 +379,7 @@ impl App {
     }
     fn get_display_content(&self) -> Vec<Line> {
         let mut visible_lines = Vec::with_capacity(self.lines.len());
-        let offset = if self.line_column < self.window_width {
-            0
-        } else {
-            self.line_column - self.window_width + 1
-        };
+        let offset = self.line_column.saturating_sub(self.window_width);
         for line in self.lines.iter() {
             match line.line_type {
                 LineType::Empty => {
@@ -378,7 +388,7 @@ impl App {
                 _ => {
                     let end_offset = line.start_in_buffer + line.length;
                     let start_offset = line.start_in_buffer + offset;
-                    let visible_end_offset = min(end_offset,start_offset + self.window_width);
+                    let visible_end_offset = min(end_offset, start_offset + self.window_width);
                     if start_offset >= end_offset {
                         visible_lines.push(Line::from(""));
                     } else {
@@ -397,7 +407,7 @@ impl App {
         self.piece_tree.insert_char(new_content, self.index);
         self.index += 1;
         self.refresh_content();
-        self.compute_row_and_col_from_index();
+        self.compute_row_and_col_from_index(CursorMovementDirection::Right);
     }
     fn insert(&mut self, new_content: &str) {
         let previous_lf_count = self.piece_tree.get_line_feed_count();
@@ -416,7 +426,7 @@ impl App {
             self.start_line_number = new_top_line;
         }
         self.refresh_content();
-        self.compute_row_and_col_from_index();
+        self.compute_row_and_col_from_index(CursorMovementDirection::Right);
     }
     fn refresh_content(&mut self) {
         self.buffer.clear();
@@ -448,14 +458,14 @@ impl App {
                 }
             }
         }
-        sum += self.column_number;
+        sum += self.line_column;
         self.index = sum + self.start_index;
     }
-    fn compute_row_and_col_from_index(&mut self) {
+    fn compute_row_and_col_from_index(&mut self, direction: CursorMovementDirection) {
         let mut remainder = self.index - self.start_index;
         let mut rows = 0;
         for line in self.lines.iter() {
-            if remainder > line.length {
+            if remainder >= line.length() {
                 match line.line_type {
                     LineType::Independent => {
                         remainder -= line.length();
@@ -477,7 +487,15 @@ impl App {
             } else {
                 self.row_number = rows;
                 self.line_column = remainder;
-                self.column_number = min(self.window_width - 1, remainder);
+                match direction {
+                    CursorMovementDirection::Left => {
+                        self.column_number = remainder % self.window_width;
+                    }
+                    CursorMovementDirection::Right => {
+                        self.column_number = min(self.window_width,remainder);
+                    },
+                }
+                self.col_hint = remainder;
                 return;
             }
         }
@@ -544,6 +562,10 @@ enum Mode {
     Normal,
     Editing,
     Exiting,
+}
+enum CursorMovementDirection {
+    Left,
+    Right,
 }
 
 #[derive(Debug)]

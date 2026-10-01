@@ -824,7 +824,6 @@ impl PieceTree {
             }
             let length = length.min(root_node.subtree_len - offset);
             self.undo_stack.push(Some(root_node.clone()));
-            // let root_node = root_node.deref();
             if offset == 0 && length >= root_node.subtree_len {
                 self.redo_stack.clear();
                 self.root = None;
@@ -912,6 +911,32 @@ impl PieceTree {
     }
     fn last(path: &[Rc<Node>]) -> Rc<Node> {
         path[path.len() - 1].clone()
+    }
+    fn last_2<'a>(path: &[&'a Node]) -> &'a Node {
+        path[path.len() - 1]
+    }
+    fn next_2(&self, path: &mut Vec<&Node>) -> bool {
+        let mut node = Self::last_2(path);
+        let right = node.right.as_ref().unwrap().deref();
+        let black_leaf = self.black_leaf.deref();
+        if right != black_leaf {
+            let mut n = right;
+            while n != black_leaf {
+                path.push(n);
+                n = node.right.as_ref().unwrap().deref();
+            }
+            return true;
+        }
+        while path.len() > 1 {
+            path.pop();
+            let parent = Self::last_2(path);
+            if parent.left.as_ref().unwrap().deref() == node {
+                return true;
+            }
+            node = parent;
+        }
+
+        false
     }
     fn next(&self, path: &mut Vec<Rc<Node>>) -> bool {
         let mut node = Self::last(path);
@@ -1022,7 +1047,7 @@ impl PieceTree {
             start,
             end,
             0,
-            1,
+            content.len_utf8(),
             BufferType::Add,
             Color::Red,
             Some(self.black_leaf.clone()),
@@ -1040,7 +1065,7 @@ impl PieceTree {
                 && node_position.start_offset + piece.length == offset
                 && piece.buffer_type == BufferType::Add
             {
-                let replacement = self.expand_piece(&piece, 1);
+                let replacement = self.expand_piece(&piece, content.len_utf8());
                 self.last_change_in_buffer = replacement.end;
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, replacement);
@@ -1067,7 +1092,8 @@ impl PieceTree {
                 ));
                 self.last_change_in_buffer = node_to_insert.end;
                 let new_root = self.insert_at(new_root.deref(), offset, node_to_insert);
-                let new_root = self.insert_at(new_root.deref(), offset + 1, second_part);
+                let new_root =
+                    self.insert_at(new_root.deref(), offset + content.len_utf8(), second_part);
                 self.root = Some(self.blacken(new_root));
             } else {
                 self.last_change_in_buffer = node_to_insert.end;
@@ -1139,7 +1165,7 @@ impl PieceTree {
         }
         self.redo_stack.clear();
     }
-    fn blacken(&self, node: Rc<Node>) -> Rc<Node> { 
+    fn blacken(&self, node: Rc<Node>) -> Rc<Node> {
         Rc::new(Node::new(
             node.start,
             node.end,
