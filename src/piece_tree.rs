@@ -91,6 +91,10 @@ impl PieceTree {
     }
     pub fn get_sub_text(&self, content: &mut String, start_index: usize, length: usize) {
         if let Some(root_node) = self.root.as_ref() {
+            if start_index>= root_node.subtree_len {
+                return;
+            }
+            let length = length.min(root_node.subtree_len-start_index);
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
     }

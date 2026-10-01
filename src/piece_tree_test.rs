@@ -369,6 +369,24 @@ mod tests {
         assert_eq!(sub_text(&empty, 100, 100), "");
     }
 
+    #[test]
+    fn sub_text_huge_length_does_not_overflow() {
+        let tree = PieceTree::new("abcdef");
+        assert_eq!(sub_text(&tree, 0, usize::MAX), "abcdef");
+        assert_eq!(sub_text(&tree, 2, usize::MAX), "cdef");
+        assert_eq!(sub_text(&tree, 6, usize::MAX), "");
+    }
+
+    #[test]
+    fn sub_text_huge_length_across_pieces_does_not_overflow() {
+        let mut tree = PieceTree::new("abcdefghij");
+        tree.insert("XXX", 5);
+        // abcdeXXXfghij
+        assert_eq!(sub_text(&tree, 0, usize::MAX), "abcdeXXXfghij");
+        assert_eq!(sub_text(&tree, 3, usize::MAX), "deXXXfghij");
+        assert_eq!(sub_text(&tree, 5, usize::MAX), "XXXfghij");
+    }
+
     // ============================================================
     // Deletion
     // ============================================================
