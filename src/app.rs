@@ -216,30 +216,14 @@ impl App {
                     },
                     Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Enter => {
-                            self.undo_states.push(UndoRedoState {
-                                start_line_number: self.start_line_number,
-                                start_index: self.start_index,
-                                index: self.index,
-                                row_number: self.row_number,
-                                column_number: self.column_number,
-                                start_of_line: self.start_of_line,
-                                end_of_line: self.end_of_line,
-                            });
+                            self.undo_states.push(self.snapshot());
                             self.redo_states.clear();
                             self.insert(self.index, "\n");
                             // panic!("buffer is {}",self.buffer);
                         }
                         KeyCode::Backspace => {
                             if self.index > 0 {
-                                self.undo_states.push(UndoRedoState {
-                                    start_line_number: self.start_line_number,
-                                    start_index: self.start_index,
-                                    index: self.index,
-                                    row_number: self.row_number,
-                                    column_number: self.column_number,
-                                    start_of_line: self.start_of_line,
-                                    end_of_line: self.end_of_line,
-                                });
+                                self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
                                 self.delete(self.index - 1, 1);
                             }
@@ -253,15 +237,7 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.undo_states.push(UndoRedoState {
-                                    start_line_number: self.start_line_number,
-                                    start_index: self.start_index,
-                                    index: self.index,
-                                    row_number: self.row_number,
-                                    column_number: self.column_number,
-                                    start_of_line: self.start_of_line,
-                                    end_of_line: self.end_of_line,
-                                });
+                                self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
                                 self.insert(self.index, "z");
                             }
@@ -270,15 +246,7 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
-                                self.undo_states.push(UndoRedoState {
-                                    start_line_number: self.start_line_number,
-                                    start_index: self.start_index,
-                                    index: self.index,
-                                    row_number: self.row_number,
-                                    column_number: self.column_number,
-                                    start_of_line: self.start_of_line,
-                                    end_of_line: self.end_of_line,
-                                });
+                                self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
                                 self.insert(self.index, "y");
                             }
@@ -286,15 +254,7 @@ impl App {
                         KeyCode::Char(value) => {
                             let mut buf = [0u8; 4];
                             let s = value.encode_utf8(&mut buf);
-                            self.undo_states.push(UndoRedoState {
-                                start_line_number: self.start_line_number,
-                                start_index: self.start_index,
-                                index: self.index,
-                                row_number: self.row_number,
-                                column_number: self.column_number,
-                                start_of_line: self.start_of_line,
-                                end_of_line: self.end_of_line,
-                            });
+                            self.undo_states.push(self.snapshot());
                             self.redo_states.clear();
                             self.insert(self.index, s);
                         }
@@ -390,15 +350,7 @@ impl App {
             }
             Event::Paste(pasted_string) => {
                 if let Mode::Editing = self.mode {
-                    self.undo_states.push(UndoRedoState {
-                        start_line_number: self.start_line_number,
-                        start_index: self.start_index,
-                        index: self.index,
-                        row_number: self.row_number,
-                        column_number: self.column_number,
-                        start_of_line: self.start_of_line,
-                        end_of_line: self.end_of_line,
-                    });
+                    self.undo_states.push(self.snapshot());
                     self.redo_states.clear();
                     self.insert(self.index, &pasted_string);
                 }
@@ -485,9 +437,24 @@ impl App {
         self.refresh_content();
         self.compute_row_and_col_from_index();
     }
+    fn snapshot(&self) -> UndoRedoState {
+        UndoRedoState {
+            start_line_number: self.start_line_number,
+            start_index: self.start_index,
+            index: self.index,
+            row_number: self.row_number,
+            column_number: self.column_number,
+            start_of_line: self.start_of_line,
+            end_of_line: self.end_of_line,
+        }
+    }
     fn undo(&mut self) {
         self.piece_tree.undo();
         if let Some(previous) = self.undo_states.pop() {
+            // The current state is the post-edit state, so it is what a
+            // subsequent redo must restore.
+            let current = self.snapshot();
+            self.redo_states.push(current);
             self.index = previous.index;
             self.row_number = previous.row_number;
             self.column_number = previous.column_number;
@@ -495,21 +462,23 @@ impl App {
             self.start_index = previous.start_index;
             self.start_of_line = previous.start_of_line;
             self.end_of_line = previous.end_of_line;
-            self.redo_states.push(previous);
             self.refresh_content();
         }
     }
     fn redo(&mut self) {
         self.piece_tree.redo();
-        if let Some(previous) = self.redo_states.pop() {
-            self.index = previous.index;
-            self.row_number = previous.row_number;
-            self.column_number = previous.column_number;
-            self.start_line_number = previous.start_line_number;
-            self.start_index = previous.start_index;
-            self.start_of_line = previous.start_of_line;
-            self.end_of_line = previous.end_of_line;
-            self.undo_states.push(previous);
+        if let Some(next) = self.redo_states.pop() {
+            // The current state is the pre-edit state, so it is what a
+            // subsequent undo must restore.
+            let current = self.snapshot();
+            self.undo_states.push(current);
+            self.index = next.index;
+            self.row_number = next.row_number;
+            self.column_number = next.column_number;
+            self.start_line_number = next.start_line_number;
+            self.start_index = next.start_index;
+            self.start_of_line = next.start_of_line;
+            self.end_of_line = next.end_of_line;
             self.refresh_content();
         }
     }
