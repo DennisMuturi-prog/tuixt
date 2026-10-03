@@ -35,6 +35,8 @@ pub struct App {
     col_hint: usize,
     start_of_line: usize,
     end_of_line: usize,
+    undo_states: Vec<UndoRedoState>,
+    redo_states: Vec<UndoRedoState>,
 }
 
 impl App {
@@ -134,7 +136,7 @@ impl App {
             Span::styled(
                 format!(
                     "column {} row {} index:{}",
-                    self.line_column+1,
+                    self.line_column + 1,
                     self.row_number + self.start_line_number + 1,
                     self.index
                 ),
@@ -214,11 +216,31 @@ impl App {
                     },
                     Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Enter => {
+                            self.undo_states.push(UndoRedoState {
+                                start_line_number: self.start_line_number,
+                                start_index: self.start_index,
+                                index: self.index,
+                                row_number: self.row_number,
+                                column_number: self.column_number,
+                                start_of_line: self.start_of_line,
+                                end_of_line: self.end_of_line,
+                            });
+                            self.redo_states.clear();
                             self.insert(self.index, "\n");
                             // panic!("buffer is {}",self.buffer);
                         }
                         KeyCode::Backspace => {
                             if self.index > 0 {
+                                self.undo_states.push(UndoRedoState {
+                                    start_line_number: self.start_line_number,
+                                    start_index: self.start_index,
+                                    index: self.index,
+                                    row_number: self.row_number,
+                                    column_number: self.column_number,
+                                    start_of_line: self.start_of_line,
+                                    end_of_line: self.end_of_line,
+                                });
+                                self.redo_states.clear();
                                 self.delete(self.index - 1, 1);
                             }
                         }
@@ -231,6 +253,16 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
+                                self.undo_states.push(UndoRedoState {
+                                    start_line_number: self.start_line_number,
+                                    start_index: self.start_index,
+                                    index: self.index,
+                                    row_number: self.row_number,
+                                    column_number: self.column_number,
+                                    start_of_line: self.start_of_line,
+                                    end_of_line: self.end_of_line,
+                                });
+                                self.redo_states.clear();
                                 self.insert(self.index, "z");
                             }
                         }
@@ -238,12 +270,32 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
+                                self.undo_states.push(UndoRedoState {
+                                    start_line_number: self.start_line_number,
+                                    start_index: self.start_index,
+                                    index: self.index,
+                                    row_number: self.row_number,
+                                    column_number: self.column_number,
+                                    start_of_line: self.start_of_line,
+                                    end_of_line: self.end_of_line,
+                                });
+                                self.redo_states.clear();
                                 self.insert(self.index, "y");
                             }
                         }
                         KeyCode::Char(value) => {
                             let mut buf = [0u8; 4];
                             let s = value.encode_utf8(&mut buf);
+                            self.undo_states.push(UndoRedoState {
+                                start_line_number: self.start_line_number,
+                                start_index: self.start_index,
+                                index: self.index,
+                                row_number: self.row_number,
+                                column_number: self.column_number,
+                                start_of_line: self.start_of_line,
+                                end_of_line: self.end_of_line,
+                            });
+                            self.redo_states.clear();
                             self.insert(self.index, s);
                         }
                         KeyCode::Left => {
@@ -338,6 +390,16 @@ impl App {
             }
             Event::Paste(pasted_string) => {
                 if let Mode::Editing = self.mode {
+                    self.undo_states.push(UndoRedoState {
+                        start_line_number: self.start_line_number,
+                        start_index: self.start_index,
+                        index: self.index,
+                        row_number: self.row_number,
+                        column_number: self.column_number,
+                        start_of_line: self.start_of_line,
+                        end_of_line: self.end_of_line,
+                    });
+                    self.redo_states.clear();
                     self.insert(self.index, &pasted_string);
                 }
             }
@@ -409,7 +471,7 @@ impl App {
         self.piece_tree.delete(offset, length);
         let current_lf_count = self.piece_tree.get_line_feed_count();
         let removed_lines_count = previous_lf_count - current_lf_count;
-        self.index = (offset+1).saturating_sub(length);
+        self.index = (offset + 1).saturating_sub(length);
         let new_top_line = get_new_top_line(
             self.start_line_number as i32,
             self.window_height as i32,
@@ -423,8 +485,34 @@ impl App {
         self.refresh_content();
         self.compute_row_and_col_from_index();
     }
-    fn undo(&mut self) {}
-    fn redo(&mut self) {}
+    fn undo(&mut self) {
+        self.piece_tree.undo();
+        if let Some(previous) = self.undo_states.pop() {
+            self.index = previous.index;
+            self.row_number = previous.row_number;
+            self.column_number = previous.column_number;
+            self.start_line_number = previous.start_line_number;
+            self.start_index = previous.start_index;
+            self.start_of_line = previous.start_of_line;
+            self.end_of_line = previous.end_of_line;
+            self.redo_states.push(previous);
+            self.refresh_content();
+        }
+    }
+    fn redo(&mut self) {
+        self.piece_tree.redo();
+        if let Some(previous) = self.redo_states.pop() {
+            self.index = previous.index;
+            self.row_number = previous.row_number;
+            self.column_number = previous.column_number;
+            self.start_line_number = previous.start_line_number;
+            self.start_index = previous.start_index;
+            self.start_of_line = previous.start_of_line;
+            self.end_of_line = previous.end_of_line;
+            self.undo_states.push(previous);
+            self.refresh_content();
+        }
+    }
     fn insert(&mut self, offset: usize, new_content: &str) {
         let previous_lf_count = self.piece_tree.get_line_feed_count();
         self.piece_tree.insert(new_content, offset);
@@ -589,6 +677,17 @@ enum LineType {
     Between,
     End,
     Empty,
+}
+
+#[derive(Debug)]
+struct UndoRedoState {
+    start_line_number: usize,
+    start_index: usize,
+    index: usize,
+    row_number: usize,
+    column_number: usize,
+    start_of_line: usize,
+    end_of_line: usize,
 }
 #[derive(Debug)]
 pub struct TextEditorLine {

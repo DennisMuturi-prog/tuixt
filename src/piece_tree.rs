@@ -841,9 +841,9 @@ impl PieceTree {
                 return;
             }
             let length = length.min(root_node.subtree_len - offset);
-            self.undo_stack.push(Some(root_node.clone()));
+            self.undo_stack.push(Some(root_node.clone())); 
+            self.redo_stack.clear();
             if offset == 0 && length >= root_node.subtree_len {
-                self.redo_stack.clear();
                 self.root = None;
                 return;
             }
@@ -923,7 +923,6 @@ impl PieceTree {
                 };
                 self.root = Some(self.blacken(new_root));
             }
-            self.redo_stack.clear();
         }
     }
 
@@ -1033,7 +1032,8 @@ impl PieceTree {
             return;
         }
         if let Some(root_node) = self.root.take() {
-            self.undo_stack.push(Some(root_node.clone()));
+            self.undo_stack.push(Some(root_node.clone())); 
+            self.redo_stack.clear();
 
             let root_node_deref = root_node.deref();
             let node_to_insert = self.pre_insert(content);
@@ -1048,7 +1048,6 @@ impl PieceTree {
                 let new_root =
                     Self::replace_at(root_node_deref, node_position.start_offset, replacement);
                 self.root = Some(self.blacken(new_root));
-                self.redo_stack.clear();
                 return;
             }
             if node_position.start_offset + piece.length > offset
@@ -1084,7 +1083,6 @@ impl PieceTree {
             self.last_change_in_buffer = node_to_insert.end;
             self.root = Some(self.blacken(node_to_insert));
         }
-        self.redo_stack.clear();
     }
 
     fn blacken(&self, node: Rc<Node>) -> Rc<Node> {

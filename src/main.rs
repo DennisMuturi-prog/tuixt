@@ -14,8 +14,8 @@ fn main() -> io::Result<()> {
     };
     let mut app = App::new(
         "",
-        5,
-        5,
+        (initial_window_height-6) as usize,
+        (initial_window_width-6) as usize,
         false,
     );
     ratatui::run(|terminal| app.run(terminal))?;
