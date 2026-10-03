@@ -14,7 +14,7 @@ fn main() -> io::Result<()> {
     };
     let mut app = App::new(
         "",
-        (initial_window_height-6) as usize,
+        5,
         5,
         false,
     );
@@ -23,7 +23,11 @@ fn main() -> io::Result<()> {
 }
 fn testing_if_lines_are_being_created_correctly() {
     let mut piece_tree = PieceTree::default();
-    piece_tree.insert("hello world", 0);
+    piece_tree.insert("one", 0);
+    
+    piece_tree.delete(2, 1);
+    piece_tree.delete(1, 1);
+    piece_tree.delete(0, 1);
     // piece_tree.insert("\n", 11);
     let mut buffer = String::new();
     piece_tree.get_lines_text(0, 5, &mut buffer);

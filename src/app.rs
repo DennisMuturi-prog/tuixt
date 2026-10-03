@@ -134,7 +134,7 @@ impl App {
             Span::styled(
                 format!(
                     "column {} row {} index:{}",
-                    self.line_column,
+                    self.line_column+1,
                     self.row_number + self.start_line_number + 1,
                     self.index
                 ),
@@ -214,11 +214,13 @@ impl App {
                     },
                     Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Enter => {
-                            self.insert("\n");
+                            self.insert(self.index, "\n");
                             // panic!("buffer is {}",self.buffer);
                         }
                         KeyCode::Backspace => {
-                            self.delete_char();
+                            if self.index > 0 {
+                                self.delete(self.index - 1, 1);
+                            }
                         }
                         KeyCode::Esc => {
                             self.mode = Mode::Normal;
@@ -229,20 +231,20 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.insert("z");
+                                self.insert(self.index, "z");
                             }
                         }
                         KeyCode::Char('y') => {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
-                                self.insert("y");
+                                self.insert(self.index, "y");
                             }
                         }
                         KeyCode::Char(value) => {
                             let mut buf = [0u8; 4];
                             let s = value.encode_utf8(&mut buf);
-                            self.insert(s);
+                            self.insert(self.index, s);
                         }
                         KeyCode::Left => {
                             if self.row_number == 0
@@ -336,7 +338,7 @@ impl App {
             }
             Event::Paste(pasted_string) => {
                 if let Mode::Editing = self.mode {
-                    self.insert(&pasted_string);
+                    self.insert(self.index, &pasted_string);
                 }
             }
             _ => (),
@@ -402,15 +404,33 @@ impl App {
         }
         visible_lines
     }
-    fn delete_char(&mut self) {}
+    fn delete(&mut self, offset: usize, length: usize) {
+        let previous_lf_count = self.piece_tree.get_line_feed_count();
+        self.piece_tree.delete(offset, length);
+        let current_lf_count = self.piece_tree.get_line_feed_count();
+        let removed_lines_count = previous_lf_count - current_lf_count;
+        self.index = (offset+1).saturating_sub(length);
+        let new_top_line = get_new_top_line(
+            self.start_line_number as i32,
+            self.window_height as i32,
+            (self.start_line_number + self.row_number - removed_lines_count) as i32,
+            0,
+        );
+        if new_top_line != self.start_line_number {
+            self.start_index = self.piece_tree.get_start_offset_of_a_line(new_top_line);
+            self.start_line_number = new_top_line;
+        }
+        self.refresh_content();
+        self.compute_row_and_col_from_index();
+    }
     fn undo(&mut self) {}
     fn redo(&mut self) {}
-    fn insert(&mut self, new_content: &str) {
+    fn insert(&mut self, offset: usize, new_content: &str) {
         let previous_lf_count = self.piece_tree.get_line_feed_count();
-        self.piece_tree.insert(new_content, self.index);
+        self.piece_tree.insert(new_content, offset);
         let current_lf_count = self.piece_tree.get_line_feed_count();
         let new_lines_count = current_lf_count - previous_lf_count;
-        self.index += new_content.len();
+        self.index = offset + new_content.len();
         let new_top_line = get_new_top_line(
             self.start_line_number as i32,
             self.window_height as i32,
@@ -431,6 +451,7 @@ impl App {
             self.window_height,
             &mut self.buffer,
         );
+        self.lines.clear();
         compute_line_starts(&self.buffer, &mut self.lines);
     }
     fn compute_index_from_row_and_col(&mut self) {
@@ -519,7 +540,6 @@ pub fn compute_line_starts(buf: &str, lines: &mut Vec<TextEditorLine>) {
         });
         return;
     }
-    lines.clear();
     lines.push(TextEditorLine {
         start_in_buffer: 0,
         length: 0,
@@ -560,10 +580,6 @@ enum Mode {
     Normal,
     Editing,
     Exiting,
-}
-enum CursorMovementDirection {
-    Left,
-    Right,
 }
 
 #[derive(Debug, PartialEq)]
