@@ -453,8 +453,7 @@ impl App {
         if let Some(previous) = self.undo_states.pop() {
             // The current state is the post-edit state, so it is what a
             // subsequent redo must restore.
-            let current = self.snapshot();
-            self.redo_states.push(current);
+            self.redo_states.push(self.snapshot());
             self.index = previous.index;
             self.row_number = previous.row_number;
             self.column_number = previous.column_number;
@@ -470,8 +469,7 @@ impl App {
         if let Some(next) = self.redo_states.pop() {
             // The current state is the pre-edit state, so it is what a
             // subsequent undo must restore.
-            let current = self.snapshot();
-            self.undo_states.push(current);
+            self.undo_states.push(self.snapshot());
             self.index = next.index;
             self.row_number = next.row_number;
             self.column_number = next.column_number;

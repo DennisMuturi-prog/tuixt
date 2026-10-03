@@ -1079,6 +1079,7 @@ impl PieceTree {
             }
         } else {
             self.undo_stack.push(None);
+            self.redo_stack.clear();
             let node_to_insert = self.pre_insert(content);
             self.last_change_in_buffer = node_to_insert.end;
             self.root = Some(self.blacken(node_to_insert));
