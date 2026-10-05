@@ -1,0 +1,2 @@
+A text editor built with a custom input mechanism ,depending on low level terminal primitives.This implementation takes advantage of a piece tree , a combination of piece table and red black tree for efficient operations on the piece descriptors.The time complexity of most operations for a piece tree is O(logn). Also cursor movement was implemented to ensure scrolling works well and cursor movement is at the right location.
+To run it ensure you have rust installed,you can build it using cargo build to have a binary to run.
