@@ -1,7 +1,7 @@
 use std::io;
 
 use crossterm::{cursor::SetCursorStyle, execute, terminal::size};
-use tuixt::{app::{App, compute_line_starts}, piece_tree::PieceTree};
+use tuixt::{app::{App, compute_line_starts_with_no_wrap}, piece_tree::PieceTree};
 
 fn main() -> io::Result<()> {
     // testing_if_lines_are_being_created_correctly();
@@ -33,7 +33,7 @@ fn testing_if_lines_are_being_created_correctly() {
     piece_tree.get_lines_text(0, 5, &mut buffer);
 
     let mut lines = Vec::new();
-    compute_line_starts(&buffer, &mut lines);
+    compute_line_starts_with_no_wrap(&buffer, &mut lines);
     println!("lines are {:?}", lines);
     println!("buffer is {}", buffer);
     panic!("hello")

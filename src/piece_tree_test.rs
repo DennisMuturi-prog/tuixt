@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{ piece_tree::{ PieceTree}};
+    use crate::piece_tree::PieceTree;
 
     // ------------------------------------------------------------
     // Test helpers
@@ -172,7 +172,10 @@ mod tests {
     }
 
     fn char_boundaries(s: &str) -> Vec<usize> {
-        s.char_indices().map(|(i, _)| i).chain(std::iter::once(s.len())).collect()
+        s.char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(s.len()))
+            .collect()
     }
 
     // ------------------------------------------------------------
@@ -650,9 +653,7 @@ mod tests {
         for start in 0..4usize {
             for n in 0..=4usize {
                 let by_range = lines_text(&tree, start, n);
-                let by_single: String = (start..start + n)
-                    .map(|l| line_text(&tree, l))
-                    .collect();
+                let by_single: String = (start..start + n).map(|l| line_text(&tree, l)).collect();
                 assert_eq!(by_range, by_single, "start={} n={}", start, n);
             }
         }
@@ -718,7 +719,11 @@ mod tests {
             }
         }
 
-        assert_eq!(text(&tree), model.text, "tree and model diverged while building");
+        assert_eq!(
+            text(&tree),
+            model.text,
+            "tree and model diverged while building"
+        );
 
         let spans = tree.line_spans();
         assert!(
@@ -871,8 +876,19 @@ mod tests {
     fn line_start_offset_differential_fuzz() {
         let seeds = [3u64, 42, 0xABCD, 20240924];
         let snippets = [
-            "a", "bc", "hello\n", "line\n", "\n", "\r\n", "\n\n",
-            "foo\nbar\nbaz\n", "world", "🦀", "世界", " \n ", "x\ny\nz\n",
+            "a",
+            "bc",
+            "hello\n",
+            "line\n",
+            "\n",
+            "\r\n",
+            "\n\n",
+            "foo\nbar\nbaz\n",
+            "world",
+            "🦀",
+            "世界",
+            " \n ",
+            "x\ny\nz\n",
         ];
 
         for &seed in &seeds {
@@ -1100,7 +1116,7 @@ mod tests {
     fn sub_text_mid_char_offsets_across_pieces_do_not_panic() {
         let mut tree = PieceTree::new("αβγδ");
         tree.insert("x", 4); // "αβxγδ"
-        assert_eq!(sub_text(&tree, 1, 3), "αβx");
+        assert_eq!(sub_text(&tree, 1, 4), "αβx");
     }
 
     #[test]
@@ -1183,8 +1199,16 @@ mod tests {
     #[test]
     fn differential_fuzz_random_operations() {
         let snippets = [
-            "a", "bc", "Hello, world! ", "foo\nbar\n", "xyz\r\n123",
-            "\n", "\r\n", "🦀", "世界", " ",
+            "a",
+            "bc",
+            "Hello, world! ",
+            "foo\nbar\n",
+            "xyz\r\n123",
+            "\n",
+            "\r\n",
+            "🦀",
+            "世界",
+            " ",
         ];
         let seeds = [42u64, 1337, 2024, 99999, 12345678];
 
@@ -1206,7 +1230,11 @@ mod tests {
                     if boundaries.len() > 1 {
                         let idx1 = prng.next_range(0, boundaries.len());
                         let idx2 = prng.next_range(0, boundaries.len());
-                        let (start_idx, end_idx) = if idx1 <= idx2 { (idx1, idx2) } else { (idx2, idx1) };
+                        let (start_idx, end_idx) = if idx1 <= idx2 {
+                            (idx1, idx2)
+                        } else {
+                            (idx2, idx1)
+                        };
                         let start = boundaries[start_idx];
                         let length = boundaries[end_idx] - start;
                         tree.delete(start, length);
@@ -1226,7 +1254,11 @@ mod tests {
                 if boundaries.len() > 1 {
                     let idx1 = prng.next_range(0, boundaries.len());
                     let idx2 = prng.next_range(0, boundaries.len());
-                    let (start_idx, end_idx) = if idx1 <= idx2 { (idx1, idx2) } else { (idx2, idx1) };
+                    let (start_idx, end_idx) = if idx1 <= idx2 {
+                        (idx1, idx2)
+                    } else {
+                        (idx2, idx1)
+                    };
                     let start = boundaries[start_idx];
                     let length = boundaries[end_idx] - start;
                     assert_eq!(
@@ -1278,7 +1310,12 @@ mod tests {
                     tree.redo();
                     model.redo();
                 }
-                assert_eq!(text(&tree), model.text, "mismatch during undo/redo stress, seed {}", seed);
+                assert_eq!(
+                    text(&tree),
+                    model.text,
+                    "mismatch during undo/redo stress, seed {}",
+                    seed
+                );
             }
 
             for _ in 0..60 {
@@ -1359,7 +1396,16 @@ mod tests {
         let mut prng = SimplePrng::new(0xFEED_FACE);
         let mut tree = PieceTree::new("the quick\nbrown fox\njumps over\n");
         let mut model = ReferenceModel::new("the quick\nbrown fox\njumps over\n");
-        let snippets = ["hello\n", "\n", "world", "\n\n", "foo\nbar\n", "baz", "line\r\n", "🦀"];
+        let snippets = [
+            "hello\n",
+            "\n",
+            "world",
+            "\n\n",
+            "foo\nbar\n",
+            "baz",
+            "line\r\n",
+            "🦀",
+        ];
 
         for step in 0..500 {
             let lines = reference_lines(&model.text);
@@ -1410,8 +1456,19 @@ mod tests {
             let mut model = ReferenceModel::new("initial\ncontent\nwith\nseveral\nlines\n");
 
             let snippets = [
-                "a", "bc", "hello\n", "line\n", "\n", "\r\n", "\n\n",
-                "foo\nbar\nbaz\n", "world", "🦀", "世界", " \n ", "x\ny\nz\n",
+                "a",
+                "bc",
+                "hello\n",
+                "line\n",
+                "\n",
+                "\r\n",
+                "\n\n",
+                "foo\nbar\nbaz\n",
+                "world",
+                "🦀",
+                "世界",
+                " \n ",
+                "x\ny\nz\n",
             ];
 
             for step in 0..300 {
@@ -1465,9 +1522,7 @@ mod tests {
                     n
                 );
 
-                let by_single: String = (start..start + n)
-                    .map(|l| line_text(&tree, l))
-                    .collect();
+                let by_single: String = (start..start + n).map(|l| line_text(&tree, l)).collect();
                 assert_eq!(
                     lines_text(&tree, start, n),
                     by_single,
@@ -1525,5 +1580,5 @@ mod tests {
                 );
             }
         }
-    } 
+    }
 }

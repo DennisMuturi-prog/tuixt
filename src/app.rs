@@ -51,7 +51,7 @@ impl App {
         let mut buffer = String::with_capacity(window_height * window_width);
         piece_tree.get_lines_text(0, window_height, &mut buffer);
         let mut lines = Vec::with_capacity(window_height);
-        compute_line_starts(&buffer, &mut lines);
+        compute_line_starts_with_no_wrap(&buffer, &mut lines);
         Self {
             piece_tree,
             buffer,
@@ -507,7 +507,7 @@ impl App {
             &mut self.buffer,
         );
         self.lines.clear();
-        compute_line_starts(&self.buffer, &mut self.lines);
+        compute_line_starts_with_no_wrap(&self.buffer, &mut self.lines);
     }
     fn compute_index_from_row_and_col(&mut self) {
         let mut sum = 0;
@@ -586,7 +586,50 @@ fn get_new_top_line(
     let top_line_new = max(min_top, min(top_line_old, max_top));
     (max(0, top_line_new)) as usize
 }
-pub fn compute_line_starts(buf: &str, lines: &mut Vec<TextEditorLine>) {
+pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLine>) {
+    if buf.is_empty() {
+        lines.push(TextEditorLine {
+            start_in_buffer: 0,
+            length: 0,
+            line_type: LineType::Empty,
+        });
+        return;
+    }
+    lines.push(TextEditorLine {
+        start_in_buffer: 0,
+        length: 0,
+        line_type: LineType::Independent,
+    });
+    for (i, b) in buf.bytes().enumerate() {
+        if b == b'\n' {
+            if i + 1 < buf.len() {
+                lines.push(TextEditorLine {
+                    start_in_buffer: i + 1,
+                    length: 0,
+                    line_type: LineType::Independent,
+                });
+            }
+        }
+    }
+    for i in 0..lines.len() {
+        if i + 1 < lines.len() {
+            lines[i].length = lines[i + 1].start_in_buffer - lines[i].start_in_buffer - 1;
+        } else {
+            if buf.as_bytes()[buf.len() - 1] == b'\n' {
+                lines[i].length = buf.len() - lines[i].start_in_buffer - 1;
+                lines.push(TextEditorLine {
+                    start_in_buffer: i + 1,
+                    length: 0,
+                    line_type: LineType::Empty,
+                });
+            } else {
+                lines[i].length = buf.len() - lines[i].start_in_buffer;
+            }
+        }
+    }
+}
+
+pub fn compute_line_starts_with_wrap(buf: &str, lines: &mut Vec<TextEditorLine>) {
     if buf.is_empty() {
         lines.push(TextEditorLine {
             start_in_buffer: 0,
