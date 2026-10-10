@@ -1581,4 +1581,560 @@ mod tests {
             }
         }
     }
+
+    // ============================================================
+    // Length & line feed count lifecycle
+    // ============================================================
+
+    #[test]
+    fn tree_len_and_line_feed_count_lifecycle() {
+        let empty = PieceTree::new("");
+        assert_eq!(empty.get_tree_len(), 0);
+        assert_eq!(empty.get_line_feed_count(), 0);
+
+        let default_tree: PieceTree = Default::default();
+        assert_eq!(default_tree.get_tree_len(), 0);
+        assert_eq!(default_tree.get_line_feed_count(), 0);
+
+        let single = PieceTree::new("hello world");
+        assert_eq!(single.get_tree_len(), 11);
+        assert_eq!(single.get_line_feed_count(), 0);
+
+        let multi = PieceTree::new("one\ntwo\nthree\n");
+        assert_eq!(multi.get_tree_len(), 14);
+        assert_eq!(multi.get_line_feed_count(), 3);
+
+        let crlf = PieceTree::new("one\r\ntwo\r\nthree\r\n");
+        assert_eq!(crlf.get_tree_len(), 17);
+        assert_eq!(crlf.get_line_feed_count(), 3);
+
+        let emoji = PieceTree::new("🦀🚀🔥");
+        assert_eq!(emoji.get_tree_len(), 12); // 4 bytes each * 3 = 12
+        assert_eq!(emoji.get_line_feed_count(), 0);
+
+        // Dynamic edits update both metrics accurately
+        let mut tree = PieceTree::new("hello");
+        assert_eq!(tree.get_tree_len(), 5);
+        assert_eq!(tree.get_line_feed_count(), 0);
+
+        tree.insert("\nworld\n", 5);
+        assert_eq!(tree.get_tree_len(), 12);
+        assert_eq!(tree.get_line_feed_count(), 2);
+        assert_eq!(text(&tree), "hello\nworld\n");
+
+        tree.insert("there\n", 6);
+        assert_eq!(tree.get_tree_len(), 18);
+        assert_eq!(tree.get_line_feed_count(), 3);
+        assert_eq!(text(&tree), "hello\nthere\nworld\n");
+
+        // Delete newlines and content
+        tree.delete(5, 1); // deletes '\n' after hello -> "hellothere\nworld\n"
+        assert_eq!(tree.get_tree_len(), 17);
+        assert_eq!(tree.get_line_feed_count(), 2);
+
+        tree.delete(0, 17); // delete all
+        assert_eq!(tree.get_tree_len(), 0);
+        assert_eq!(tree.get_line_feed_count(), 0);
+        assert_eq!(text(&tree), "");
+
+        // Undo and redo restore len and line feed count
+        tree.undo();
+        assert_eq!(tree.get_tree_len(), 17);
+        assert_eq!(tree.get_line_feed_count(), 2);
+
+        tree.undo();
+        assert_eq!(tree.get_tree_len(), 18);
+        assert_eq!(tree.get_line_feed_count(), 3);
+
+        tree.redo();
+        assert_eq!(tree.get_tree_len(), 17);
+        assert_eq!(tree.get_line_feed_count(), 2);
+
+        tree.redo();
+        assert_eq!(tree.get_tree_len(), 0);
+        assert_eq!(tree.get_line_feed_count(), 0);
+    }
+
+    // ============================================================
+    // Consecutive typing optimization (piece expansion) & undo/redo
+    // ============================================================
+
+    #[test]
+    fn consecutive_typing_and_stepwise_undo_redo() {
+        let mut tree = PieceTree::new("");
+        let input = "hello\nworld";
+
+        for (i, ch) in input.chars().enumerate() {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            tree.insert(s, tree.get_tree_len());
+            assert_eq!(tree.get_tree_len(), i + 1);
+            assert_eq!(text(&tree), &input[..i + 1]);
+            assert!(tree.check_invariants().is_empty());
+        }
+
+        assert_eq!(text(&tree), "hello\nworld");
+        assert_eq!(tree.get_line_feed_count(), 1);
+
+        // Step-by-step undo walks back each single character
+        for i in (0..input.len()).rev() {
+            tree.undo();
+            assert_eq!(text(&tree), &input[..i]);
+            assert_eq!(tree.get_tree_len(), i);
+            assert!(tree.check_invariants().is_empty());
+        }
+
+        assert_eq!(text(&tree), "");
+        assert_eq!(tree.get_tree_len(), 0);
+
+        // Step-by-step redo restores each single character
+        for i in 1..=input.len() {
+            tree.redo();
+            assert_eq!(text(&tree), &input[..i]);
+            assert_eq!(tree.get_tree_len(), i);
+            assert!(tree.check_invariants().is_empty());
+        }
+
+        assert_eq!(text(&tree), "hello\nworld");
+    }
+
+    // ============================================================
+    // Edge cases for get_line_text
+    // ============================================================
+
+    #[test]
+    fn line_text_extreme_line_numbers_and_boundaries() {
+        let empty = PieceTree::new("");
+        assert_eq!(line_text(&empty, 0), "");
+        assert_eq!(line_text(&empty, 1), "");
+        assert_eq!(line_text(&empty, 100), "");
+        assert_eq!(line_text(&empty, usize::MAX), "");
+
+        let single = PieceTree::new("no newlines at all");
+        assert_eq!(line_text(&single, 0), "no newlines at all");
+        assert_eq!(line_text(&single, 1), "");
+        assert_eq!(line_text(&single, 2), "");
+        assert_eq!(line_text(&single, usize::MAX), "");
+
+        let trailing = PieceTree::new("one\n");
+        assert_eq!(line_text(&trailing, 0), "one\n");
+        assert_eq!(line_text(&trailing, 1), "");
+        assert_eq!(line_text(&trailing, 2), "");
+        assert_eq!(line_text(&trailing, usize::MAX), "");
+
+        let only_nl = PieceTree::new("\n\n");
+        assert_eq!(line_text(&only_nl, 0), "\n");
+        assert_eq!(line_text(&only_nl, 1), "\n");
+        assert_eq!(line_text(&only_nl, 2), "");
+        assert_eq!(line_text(&only_nl, 3), "");
+        assert_eq!(line_text(&only_nl, usize::MAX), "");
+    }
+
+    // ============================================================
+    // Edge cases for get_lines_text
+    // ============================================================
+
+    #[test]
+    fn get_lines_text_zero_count_and_extreme_indices() {
+        let tree = PieceTree::new("first\nsecond\nthird");
+
+        // Requesting 0 lines always yields empty string
+        assert_eq!(lines_text(&tree, 0, 0), "");
+        assert_eq!(lines_text(&tree, 1, 0), "");
+        assert_eq!(lines_text(&tree, 2, 0), "");
+        assert_eq!(lines_text(&tree, 3, 0), "");
+        assert_eq!(lines_text(&tree, 100, 0), "");
+        assert_eq!(lines_text(&tree, usize::MAX, 0), "");
+
+        // Extreme start line numbers
+        assert_eq!(lines_text(&tree, usize::MAX, 1), "");
+        assert_eq!(lines_text(&tree, usize::MAX, usize::MAX), "");
+
+        // Empty tree edge cases
+        let empty = PieceTree::new("");
+        assert_eq!(lines_text(&empty, 0, 0), "");
+        assert_eq!(lines_text(&empty, 0, 1), "");
+        assert_eq!(lines_text(&empty, 0, usize::MAX), "");
+        assert_eq!(lines_text(&empty, usize::MAX, 0), "");
+        assert_eq!(lines_text(&empty, usize::MAX, usize::MAX), "");
+    }
+
+    // ============================================================
+    // Edge cases for get_start_offset_of_a_line
+    // ============================================================
+
+    #[test]
+    fn line_start_offset_extreme_indices_and_boundaries() {
+        let empty = PieceTree::new("");
+        assert_eq!(line_start_offset(&empty, 0), 0);
+        assert_eq!(line_start_offset(&empty, 1), 0);
+        assert_eq!(line_start_offset(&empty, 100), 0);
+        assert_eq!(line_start_offset(&empty, usize::MAX), 0);
+
+        let single = PieceTree::new("hello");
+        assert_eq!(line_start_offset(&single, 0), 0);
+        assert_eq!(line_start_offset(&single, 1), 5);
+        assert_eq!(line_start_offset(&single, 2), 5);
+        assert_eq!(line_start_offset(&single, usize::MAX), 5);
+
+        // Document without trailing newline: lines 0, 1, 2
+        let tree = PieceTree::new("abc\ndef\nghi");
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 4);
+        assert_eq!(line_start_offset(&tree, 2), 8);
+        assert_eq!(line_start_offset(&tree, 3), 11);
+        assert_eq!(line_start_offset(&tree, 4), 11);
+        assert_eq!(line_start_offset(&tree, usize::MAX), 11);
+
+        // Document with trailing newline: lines 0, 1, 2, 3(empty)
+        let trailing = PieceTree::new("abc\ndef\nghi\n");
+        assert_eq!(line_start_offset(&trailing, 0), 0);
+        assert_eq!(line_start_offset(&trailing, 1), 4);
+        assert_eq!(line_start_offset(&trailing, 2), 8);
+        assert_eq!(line_start_offset(&trailing, 3), 12);
+        assert_eq!(line_start_offset(&trailing, 4), 12);
+        assert_eq!(line_start_offset(&trailing, usize::MAX), 12);
+    }
+
+    // ============================================================
+    // Edge cases for get_sub_text
+    // ============================================================
+
+    #[test]
+    fn sub_text_zero_length_and_extreme_indices() {
+        let tree = PieceTree::new("abcdefghij");
+
+        // Zero length requests always return empty string
+        assert_eq!(sub_text(&tree, 0, 0), "");
+        assert_eq!(sub_text(&tree, 5, 0), "");
+        assert_eq!(sub_text(&tree, 10, 0), "");
+        assert_eq!(sub_text(&tree, 100, 0), "");
+        assert_eq!(sub_text(&tree, usize::MAX, 0), "");
+
+        // Extreme start indices
+        assert_eq!(sub_text(&tree, usize::MAX, 1), "");
+        assert_eq!(sub_text(&tree, usize::MAX, usize::MAX), "");
+        assert_eq!(sub_text(&tree, 10, 1), "");
+        assert_eq!(sub_text(&tree, 10, usize::MAX), "");
+
+        // Slicing from valid offset with huge length clamps safely
+        assert_eq!(sub_text(&tree, 0, usize::MAX), "abcdefghij");
+        assert_eq!(sub_text(&tree, 4, usize::MAX), "efghij");
+        assert_eq!(sub_text(&tree, 9, usize::MAX), "j");
+
+        let empty = PieceTree::new("");
+        assert_eq!(sub_text(&empty, 0, 0), "");
+        assert_eq!(sub_text(&empty, 0, 10), "");
+        assert_eq!(sub_text(&empty, usize::MAX, usize::MAX), "");
+    }
+
+    // ============================================================
+    // Extreme deletion edge cases
+    // ============================================================
+
+    #[test]
+    fn delete_extreme_ranges_and_stepwise_draining() {
+        // Delete with usize::MAX length from offset 0 empties document
+        let mut tree = PieceTree::new("hello world");
+        tree.delete(0, usize::MAX);
+        assert_eq!(text(&tree), "");
+        assert_eq!(tree.get_tree_len(), 0);
+        assert_eq!(tree.get_line_feed_count(), 0);
+        assert!(tree.check_invariants().is_empty());
+
+        // Delete with usize::MAX from middle
+        let mut tree2 = PieceTree::new("hello world");
+        tree2.delete(5, usize::MAX);
+        assert_eq!(text(&tree2), "hello");
+        assert_eq!(tree2.get_tree_len(), 5);
+        assert!(tree2.check_invariants().is_empty());
+
+        // Delete with extreme offset is no-op
+        let mut tree3 = PieceTree::new("hello");
+        tree3.delete(usize::MAX, 10);
+        tree3.delete(usize::MAX, usize::MAX);
+        tree3.delete(5, usize::MAX); // offset at end
+        assert_eq!(text(&tree3), "hello");
+        assert_eq!(tree3.get_tree_len(), 5);
+
+        // Repeated single-byte delete from front until empty
+        let mut drain_front = PieceTree::new("abcdefghij");
+        for expected_len in (0..10).rev() {
+            drain_front.delete(0, 1);
+            assert_eq!(drain_front.get_tree_len(), expected_len);
+            assert!(drain_front.check_invariants().is_empty());
+        }
+        assert_eq!(text(&drain_front), "");
+
+        // Repeated single-byte delete from back until empty
+        let mut drain_back = PieceTree::new("abcdefghij");
+        for expected_len in (0..10).rev() {
+            drain_back.delete(expected_len, 1);
+            assert_eq!(drain_back.get_tree_len(), expected_len);
+            assert!(drain_back.check_invariants().is_empty());
+        }
+        assert_eq!(text(&drain_back), "");
+    }
+
+    // ============================================================
+    // Split CRLF across piece boundaries
+    // ============================================================
+
+    #[test]
+    fn split_crlf_across_pieces_and_crlf_deletions() {
+        // '\r' in original piece, '\n' in added piece
+        let mut tree = PieceTree::new("hello\r");
+        tree.insert("\nworld", 6);
+        assert_eq!(text(&tree), "hello\r\nworld");
+        assert_eq!(line_text(&tree, 0), "hello\r\n");
+        assert_eq!(line_text(&tree, 1), "world");
+        assert_eq!(tree.get_line_feed_count(), 1);
+        assert_eq!(line_start_offset(&tree, 0), 0);
+        assert_eq!(line_start_offset(&tree, 1), 7);
+        assert!(tree.check_invariants().is_empty());
+
+        // Deleting '\r' from CRLF leaves '\n'
+        let mut del_cr = PieceTree::new("line1\r\nline2\r\n");
+        del_cr.delete(5, 1); // remove '\r' of line 1
+        assert_eq!(text(&del_cr), "line1\nline2\r\n");
+        assert_eq!(line_text(&del_cr, 0), "line1\n");
+        assert_eq!(line_text(&del_cr, 1), "line2\r\n");
+        assert_eq!(del_cr.get_line_feed_count(), 2);
+
+        // Deleting '\n' from CRLF leaves '\r', merging lines
+        let mut del_lf = PieceTree::new("line1\r\nline2\r\n");
+        del_lf.delete(6, 1); // remove '\n' of line 1
+        assert_eq!(text(&del_lf), "line1\rline2\r\n");
+        assert_eq!(line_text(&del_lf, 0), "line1\rline2\r\n");
+        assert_eq!(line_text(&del_lf, 1), "");
+        assert_eq!(del_lf.get_line_feed_count(), 1);
+    }
+
+    // ============================================================
+    // Structural twin / identical pieces behavior
+    // ============================================================
+
+    #[test]
+    fn structural_twin_identical_pieces_behavior() {
+        // Multiple identical pieces placed across the tree
+        let mut tree = PieceTree::new("block_");
+        tree.insert("block_", 6);
+        tree.insert("block_", 6);
+        tree.insert("block_", 0);
+        // "block_block_block_block_" (4 identical pieces)
+        assert_eq!(text(&tree), "block_block_block_block_");
+        assert_eq!(tree.get_tree_len(), 24);
+        assert!(tree.check_invariants().is_empty());
+
+        // Delete one twin piece from the middle
+        tree.delete(6, 6);
+        assert_eq!(text(&tree), "block_block_block_");
+        assert_eq!(tree.get_tree_len(), 18);
+        assert!(tree.check_invariants().is_empty());
+
+        // Verify sub_text and line queries work across remaining identical pieces
+        assert_eq!(sub_text(&tree, 0, 12), "block_block_");
+        assert_eq!(sub_text(&tree, 6, 12), "block_block_");
+    }
+
+    // ============================================================
+    // Heavy sequential prepending and appending (red-black rebalancing)
+    // ============================================================
+
+    #[test]
+    fn heavy_sequential_rebalancing_left_right_alternating() {
+        // Left-leaning heavy insertions (prepending)
+        let mut left_tree = PieceTree::new("");
+        for i in 0..100 {
+            let chunk = format!("[{:03}]", i);
+            left_tree.insert(&chunk, 0);
+            assert!(
+                left_tree.check_invariants().is_empty(),
+                "left tree invariants broken at step {}",
+                i
+            );
+        }
+        assert_eq!(left_tree.get_tree_len(), 500);
+
+        // Right-leaning heavy insertions (appending)
+        let mut right_tree = PieceTree::new("");
+        for i in 0..100 {
+            let chunk = format!("[{:03}]", i);
+            right_tree.insert(&chunk, right_tree.get_tree_len());
+            assert!(
+                right_tree.check_invariants().is_empty(),
+                "right tree invariants broken at step {}",
+                i
+            );
+        }
+        assert_eq!(right_tree.get_tree_len(), 500);
+
+        // Alternating prepend and append
+        let mut alt_tree = PieceTree::new("center");
+        for i in 0..60 {
+            if i % 2 == 0 {
+                alt_tree.insert("L", 0);
+            } else {
+                alt_tree.insert("R", alt_tree.get_tree_len());
+            }
+            assert!(
+                alt_tree.check_invariants().is_empty(),
+                "alt tree invariants broken at step {}",
+                i
+            );
+        }
+        assert_eq!(alt_tree.get_tree_len(), 66);
+    }
+
+    // ============================================================
+    // Large deletion spanning dozens of pieces
+    // ============================================================
+
+    #[test]
+    fn large_deletion_spanning_many_pieces() {
+        let mut tree = PieceTree::new("");
+        let mut model = ReferenceModel::new("");
+
+        // Build 60 distinct pieces
+        for i in 0..60 {
+            let s = format!("p{:02}:", i);
+            tree.insert(&s, tree.get_tree_len());
+            model.insert(&s, model.text.len());
+        }
+
+        assert_eq!(text(&tree), model.text);
+        assert_eq!(tree.get_tree_len(), 240);
+        assert!(tree.check_invariants().is_empty());
+
+        // Delete from piece 15 to piece 45 (spanning 30 pieces completely)
+        let start = 15 * 4;
+        let len = 30 * 4;
+        tree.delete(start, len);
+        model.delete(start, len);
+
+        assert_eq!(text(&tree), model.text);
+        assert_eq!(tree.get_tree_len(), 120);
+        assert!(
+            tree.check_invariants().is_empty(),
+            "invariants broken after spanning deletion: {:?}",
+            tree.check_invariants()
+        );
+
+        // Undo restores all 60 pieces
+        tree.undo();
+        model.undo();
+        assert_eq!(text(&tree), model.text);
+        assert_eq!(tree.get_tree_len(), 240);
+        assert!(tree.check_invariants().is_empty());
+
+        // Redo reapplies the large deletion
+        tree.redo();
+        model.redo();
+        assert_eq!(text(&tree), model.text);
+        assert_eq!(tree.get_tree_len(), 120);
+        assert!(tree.check_invariants().is_empty());
+    }
+
+    // ============================================================
+    // Complex Unicode & combining characters
+    // ============================================================
+
+    #[test]
+    fn complex_unicode_and_combining_characters() {
+        // Combining diacritical marks: 'e' + '\u{0301}' (combining acute accent)
+        let mut tree = PieceTree::new("cafe\u{0301}");
+        assert_eq!(text(&tree), "cafe\u{0301}");
+        assert_eq!(tree.get_tree_len(), 6); // 'c','a','f','e' = 4 bytes, '\u{0301}' = 2 bytes
+
+        // Insert another combining mark
+        tree.insert("\u{0308}", 6); // combining diaeresis
+        assert_eq!(text(&tree), "cafe\u{0301}\u{0308}");
+        assert_eq!(tree.get_tree_len(), 8);
+
+        // Zero-width joiner sequences: woman technologist "👩\u{200D}💻"
+        let mut zwj = PieceTree::new("👩\u{200D}💻");
+        assert_eq!(text(&zwj), "👩\u{200D}💻");
+        zwj.insert(" works on ", 4); // right after the woman emoji (4 bytes)
+        assert_eq!(text(&zwj), "👩 works on \u{200D}💻");
+        assert!(zwj.check_invariants().is_empty());
+
+        // Multibyte text with newlines and start offsets
+        let multi_nl = PieceTree::new("🦀\n🚀🚀\n🎉🎉🎉\n");
+        assert_eq!(multi_nl.get_line_feed_count(), 3);
+        assert_eq!(line_start_offset(&multi_nl, 0), 0);
+        assert_eq!(line_start_offset(&multi_nl, 1), 5); // 4 + 1
+        assert_eq!(line_start_offset(&multi_nl, 2), 14); // 5 + 8 + 1
+        assert_eq!(line_start_offset(&multi_nl, 3), 27); // 14 + 12 + 1
+        assert_eq!(line_text(&multi_nl, 0), "🦀\n");
+        assert_eq!(line_text(&multi_nl, 1), "🚀🚀\n");
+        assert_eq!(line_text(&multi_nl, 2), "🎉🎉🎉\n");
+        assert_eq!(line_text(&multi_nl, 3), "");
+    }
+
+    // ============================================================
+    // Differential fuzzing with length and line feed verification
+    // ============================================================
+
+    #[test]
+    fn differential_fuzz_length_and_line_feeds() {
+        let seeds = [42u64, 1337, 0xCAFE_BABE];
+
+        for &seed in &seeds {
+            let mut prng = SimplePrng::new(seed);
+            let mut tree = PieceTree::new("");
+            let mut model = ReferenceModel::new("");
+
+            for step in 0..200 {
+                let op = prng.next_range(0, 100);
+                if op < 50 || model.text.is_empty() {
+                    let choose_nl = prng.next_range(0, 4) == 0;
+                    let snippet = if choose_nl {
+                        "\n".to_string()
+                    } else {
+                        let len = 1 + prng.next_range(0, 5);
+                        (0..len).map(|_| char::from(b'a' + prng.next_range(0, 5) as u8)).collect()
+                    };
+                    let pos = prng.next_range(0, model.text.len() + 1);
+                    tree.insert(&snippet, pos);
+                    model.insert(&snippet, pos);
+                } else if op < 65 {
+                    let pos = prng.next_range(0, model.text.len());
+                    let del = 1 + prng.next_range(0, model.text.len() - pos);
+                    tree.delete(pos, del);
+                    model.delete(pos, del);
+                } else if op < 85 {
+                    tree.undo();
+                    model.undo();
+                } else {
+                    tree.redo();
+                    model.redo();
+                }
+
+                assert_eq!(text(&tree), model.text, "seed {} step {}: text mismatch", seed, step);
+                assert_eq!(
+                    tree.get_tree_len(),
+                    model.text.len(),
+                    "seed {} step {}: tree len mismatch",
+                    seed,
+                    step
+                );
+                assert_eq!(
+                    tree.get_line_feed_count(),
+                    model.text.matches('\n').count(),
+                    "seed {} step {}: line feed count mismatch",
+                    seed,
+                    step
+                );
+                let violations = tree.check_invariants();
+                assert!(
+                    violations.is_empty(),
+                    "seed {} step {}: invariants broken: {:?}",
+                    seed,
+                    step,
+                    violations
+                );
+            }
+        }
+    }
 }
+

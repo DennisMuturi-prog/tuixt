@@ -13,6 +13,7 @@ use ratatui::{
     text::{Line, Span, Text, ToLine},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::piece_tree::PieceTree;
 
@@ -23,6 +24,7 @@ pub struct App {
     column_number: usize,
     row_number: usize,
     index: usize,
+    char_pos: usize,
     start_line_number: usize,
     start_index: usize,
     buffer: String,
@@ -218,14 +220,21 @@ impl App {
                         KeyCode::Enter => {
                             self.undo_states.push(self.snapshot());
                             self.redo_states.clear();
+                            self.char_pos += 1;
                             self.insert(self.index, "\n");
-                            // panic!("buffer is {}",self.buffer);
                         }
                         KeyCode::Backspace => {
                             if self.index > 0 {
                                 self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
-                                self.delete(self.index - 1, 1);
+                                let local_index = self.index - self.start_index - 1;
+                                let starting_of_this_char =
+                                    self.buffer.floor_char_boundary(local_index);
+                                let byte_width = local_index - starting_of_this_char + 1;
+                                let char_to_be_deleted =
+                                    &self.buffer[starting_of_this_char..=local_index];
+                                self.char_pos -= char_to_be_deleted.width();
+                                self.delete(self.index - byte_width, byte_width);
                             }
                         }
                         KeyCode::Esc => {
@@ -239,6 +248,7 @@ impl App {
                             } else {
                                 self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
+                                self.char_pos += 1;
                                 self.insert(self.index, "z");
                             }
                         }
@@ -248,6 +258,7 @@ impl App {
                             } else {
                                 self.undo_states.push(self.snapshot());
                                 self.redo_states.clear();
+                                self.char_pos += 1;
                                 self.insert(self.index, "y");
                             }
                         }
@@ -256,9 +267,13 @@ impl App {
                             let s = value.encode_utf8(&mut buf);
                             self.undo_states.push(self.snapshot());
                             self.redo_states.clear();
+                            self.char_pos += s.width();
                             self.insert(self.index, s);
                         }
                         KeyCode::Left => {
+                            if self.index == 0 {
+                                return Ok(());
+                            }
                             if self.row_number == 0
                                 && self.column_number == 0
                                 && (self.start_line_number as i32 - 1) >= 0
@@ -268,16 +283,24 @@ impl App {
                                     .piece_tree
                                     .get_start_offset_of_a_line(self.start_line_number);
                                 self.refresh_content();
+                                self.char_pos += self.lines[0].width;
                             }
-                            self.index = self.index.saturating_sub(1);
-                            self.compute_row_and_col_from_index();
+                            let local_index = self.index - self.start_index - 1;
+                            let starting_of_this_char =
+                                self.buffer.floor_char_boundary(local_index);
+                            let byte_width = local_index - starting_of_this_char + 1;
+                            let char_to_be_pass = &self.buffer[starting_of_this_char..=local_index];
+                            self.index -= byte_width;
+                            self.char_pos -= char_to_be_pass.width();
+                            self.compute_row_and_col_from_char_pos();
                         }
                         KeyCode::Right => {
                             if self.row_number + 1 >= self.window_height
-                                && self.column_number + 1 >= self.lines[self.row_number].length()
+                                && self.column_number + 1 >= self.lines[self.row_number].width
                             {
                                 let total_lines = self.piece_tree.get_line_feed_count() + 1;
                                 if self.start_line_number + self.row_number + 1 < total_lines {
+                                    self.char_pos -= self.lines[0].width;
                                     self.start_line_number += 1;
                                     self.start_index = self
                                         .piece_tree
@@ -287,8 +310,14 @@ impl App {
                             }
 
                             let content_len = self.piece_tree.get_tree_len();
-                            self.index = min(content_len, self.index + 1);
-                            self.compute_row_and_col_from_index();
+                            let local_index = self.index - self.start_index;
+                            let ending_of_this_char =
+                                self.buffer.ceil_char_boundary(local_index + 1);
+                            let byte_width = ending_of_this_char - local_index;
+                            let char_to_be_pass = &self.buffer[local_index..ending_of_this_char];
+                            self.index = min(content_len, self.index + byte_width);
+                            self.char_pos += char_to_be_pass.width();
+                            self.compute_row_and_col_from_char_pos();
                         }
                         KeyCode::PageDown => {
                             if self.row_number + 1 >= self.window_height
@@ -296,6 +325,7 @@ impl App {
                             {
                                 let total_lines = self.piece_tree.get_line_feed_count() + 1;
                                 if self.start_line_number + self.row_number + 1 < total_lines {
+                                    self.char_pos -= self.lines[0].width;
                                     self.start_line_number += 1;
                                     self.start_index = self
                                         .piece_tree
@@ -305,8 +335,14 @@ impl App {
                             }
 
                             let content_len = self.piece_tree.get_tree_len();
-                            self.index = min(content_len, self.index + 1);
-                            self.compute_row_and_col_from_index();
+                            let local_index = self.index - self.start_index;
+                            let ending_of_this_char =
+                                self.buffer.ceil_char_boundary(local_index + 1);
+                            let byte_width = ending_of_this_char - local_index;
+                            let char_to_be_pass = &self.buffer[local_index..ending_of_this_char];
+                            self.index = min(content_len, self.index + byte_width);
+                            self.char_pos += char_to_be_pass.width();
+                            self.compute_row_and_col_from_char_pos();
                         }
                         KeyCode::Up => {
                             if self.row_number == 0 {
@@ -316,6 +352,7 @@ impl App {
                                         .piece_tree
                                         .get_start_offset_of_a_line(self.start_line_number);
                                     self.refresh_content();
+                                    self.char_pos += self.lines[0].width;
                                     self.compute_next_line_col();
                                     self.compute_index_from_row_and_col();
                                 }
@@ -329,6 +366,7 @@ impl App {
                             if self.row_number + 1 >= self.window_height {
                                 let total_lines = self.piece_tree.get_line_feed_count() + 1;
                                 if self.start_line_number + self.row_number + 1 < total_lines {
+                                    self.char_pos -= self.lines[0].width;
                                     self.start_line_number += 1;
                                     self.start_index = self
                                         .piece_tree
@@ -435,7 +473,7 @@ impl App {
             self.start_line_number = new_top_line;
         }
         self.refresh_content();
-        self.compute_row_and_col_from_index();
+        self.compute_row_and_col_from_char_pos();
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -497,7 +535,7 @@ impl App {
             self.start_line_number = new_top_line;
         }
         self.refresh_content();
-        self.compute_row_and_col_from_index();
+        self.compute_row_and_col_from_char_pos();
     }
     fn refresh_content(&mut self) {
         self.buffer.clear();
@@ -533,26 +571,26 @@ impl App {
         sum += self.line_column;
         self.index = sum + self.start_index;
     }
-    fn compute_row_and_col_from_index(&mut self) {
-        let mut remainder = self.index - self.start_index;
+    fn compute_row_and_col_from_char_pos(&mut self) {
+        let mut remainder = self.char_pos;
         let mut rows = 0;
         for line in self.lines.iter() {
-            if remainder >= line.length() && line.line_type != LineType::Empty {
+            if remainder > line.width && line.line_type != LineType::Empty {
                 match line.line_type {
                     LineType::Independent => {
-                        remainder -= line.length();
+                        remainder -= line.width + 1;
                     }
                     LineType::Start => {
-                        remainder -= line.length();
+                        remainder -= line.width;
                     }
                     LineType::Between => {
-                        remainder -= line.length();
+                        remainder -= line.width;
                     }
                     LineType::End => {
-                        remainder -= line.length();
+                        remainder -= line.width;
                     }
                     LineType::Empty => {
-                        remainder -= line.length();
+                        remainder -= line.width;
                     }
                 }
                 rows += 1;
@@ -586,12 +624,13 @@ fn get_new_top_line(
     let top_line_new = max(min_top, min(top_line_old, max_top));
     (max(0, top_line_new)) as usize
 }
-pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLine>) {
+fn compute_line_starts_with_no_wrap_old(buf: &str, lines: &mut Vec<TextEditorLine>) {
     if buf.is_empty() {
         lines.push(TextEditorLine {
             start_in_buffer: 0,
             length: 0,
             line_type: LineType::Empty,
+            width: 0,
         });
         return;
     }
@@ -599,6 +638,7 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
         start_in_buffer: 0,
         length: 0,
         line_type: LineType::Independent,
+        width: 0,
     });
     for (i, b) in buf.bytes().enumerate() {
         if b == b'\n' {
@@ -607,6 +647,7 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
                     start_in_buffer: i + 1,
                     length: 0,
                     line_type: LineType::Independent,
+                    width: 0,
                 });
             }
         }
@@ -621,6 +662,7 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
                     start_in_buffer: i + 1,
                     length: 0,
                     line_type: LineType::Empty,
+                    width: 0,
                 });
             } else {
                 lines[i].length = buf.len() - lines[i].start_in_buffer;
@@ -629,46 +671,40 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
     }
 }
 
-pub fn compute_line_starts_with_wrap(buf: &str, lines: &mut Vec<TextEditorLine>) {
+pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLine>) {
     if buf.is_empty() {
         lines.push(TextEditorLine {
             start_in_buffer: 0,
             length: 0,
             line_type: LineType::Empty,
+            width: 0,
         });
         return;
     }
-    lines.push(TextEditorLine {
-        start_in_buffer: 0,
-        length: 0,
-        line_type: LineType::Independent,
-    });
-    for (i, b) in buf.bytes().enumerate() {
-        if b == b'\n' {
-            if i + 1 < buf.len() {
-                lines.push(TextEditorLine {
-                    start_in_buffer: i + 1,
-                    length: 0,
-                    line_type: LineType::Independent,
-                });
-            }
+    let mut offset = 0;
+    for line in buf.lines() {
+        let txt_line = TextEditorLine {
+            start_in_buffer: offset,
+            length: line.len(),
+            line_type: LineType::Independent,
+            width: line.width(),
+        };
+        lines.push(txt_line);
+        offset += line.len();
+        if offset < buf.len() && buf.as_bytes()[offset] == b'\n' {
+            offset += 1;
+        } else {
+            offset += 2;
         }
     }
-    for i in 0..lines.len() {
-        if i + 1 < lines.len() {
-            lines[i].length = lines[i + 1].start_in_buffer - lines[i].start_in_buffer - 1;
-        } else {
-            if buf.as_bytes()[buf.len() - 1] == b'\n' {
-                lines[i].length = buf.len() - lines[i].start_in_buffer - 1;
-                lines.push(TextEditorLine {
-                    start_in_buffer: i + 1,
-                    length: 0,
-                    line_type: LineType::Empty,
-                });
-            } else {
-                lines[i].length = buf.len() - lines[i].start_in_buffer;
-            }
-        }
+    if buf.as_bytes()[buf.len() - 1] == b'\n' {
+        let txt_line = TextEditorLine {
+            start_in_buffer: 0,
+            length: 0,
+            line_type: LineType::Empty,
+            width: 0,
+        };
+        lines.push(txt_line);
     }
 }
 
@@ -704,6 +740,7 @@ pub struct TextEditorLine {
     start_in_buffer: usize,
     length: usize,
     line_type: LineType,
+    width: usize,
 }
 impl TextEditorLine {
     fn length(&self) -> usize {
