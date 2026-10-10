@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, min},
-    io,
+    io, usize,
 };
 
 use crossterm::{cursor::SetCursorStyle, execute};
@@ -13,6 +13,7 @@ use ratatui::{
     text::{Line, Span, Text, ToLine},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
 use crate::piece_tree::PieceTree;
@@ -36,7 +37,6 @@ pub struct App {
     line_column: usize,
     col_hint: usize,
     start_of_line: usize,
-    end_of_line: usize,
     undo_states: Vec<UndoRedoState>,
     redo_states: Vec<UndoRedoState>,
 }
@@ -62,7 +62,6 @@ impl App {
             window_width,
             wrap,
             start_of_line: 0,
-            end_of_line: window_width,
             ..Self::default()
         }
     }
@@ -314,9 +313,9 @@ impl App {
                             let ending_of_this_char =
                                 self.buffer.ceil_char_boundary(local_index + 1);
                             let byte_width = ending_of_this_char - local_index;
-                            let char_to_be_pass = &self.buffer[local_index..ending_of_this_char];
+                            let char_to_pass = &self.buffer[local_index..ending_of_this_char];
                             self.index = min(content_len, self.index + byte_width);
-                            self.char_pos += char_to_be_pass.width();
+                            self.char_pos += char_to_pass.width();
                             self.compute_row_and_col_from_char_pos();
                         }
                         KeyCode::PageDown => {
@@ -390,6 +389,7 @@ impl App {
                 if let Mode::Editing = self.mode {
                     self.undo_states.push(self.snapshot());
                     self.redo_states.clear();
+                    self.char_pos += pasted_string.width();
                     self.insert(self.index, &pasted_string);
                 }
             }
@@ -400,7 +400,6 @@ impl App {
     fn compute_next_line_col(&mut self) {
         self.line_column = min(self.col_hint, self.lines[self.row_number].length);
         self.start_of_line = self.line_column.saturating_sub(self.window_width);
-        self.end_of_line = self.start_of_line + self.window_width;
         self.column_number = self.line_column - self.start_of_line;
     }
     fn get_line_numbers_gutter(&self) -> String {
@@ -442,15 +441,16 @@ impl App {
                     visible_lines.push(Line::from(""));
                 }
                 _ => {
-                    let end_offset = line.start_in_buffer + line.length;
-                    let start_offset = line.start_in_buffer + self.start_of_line;
-                    let visible_end_offset = min(end_offset, start_offset + self.window_width);
-                    if start_offset >= end_offset {
+                    let end = line.start_in_buffer + line.length;
+                    if line.width <= self.start_of_line {
                         visible_lines.push(Line::from(""));
-                    } else {
-                        let line = Line::from(&self.buffer[start_offset..visible_end_offset]);
-                        visible_lines.push(line);
+                        continue;
                     }
+                    let suffix_width = line.width - self.start_of_line;
+                    let (suffix, _) = (&self.buffer[line.start_in_buffer..end])
+                        .unicode_truncate_start(suffix_width);
+                    let (final_trim, _) = suffix.unicode_truncate(self.window_width);
+                    visible_lines.push(Line::from(final_trim));
                 }
             }
         }
@@ -483,7 +483,6 @@ impl App {
             row_number: self.row_number,
             column_number: self.column_number,
             start_of_line: self.start_of_line,
-            end_of_line: self.end_of_line,
         }
     }
     fn undo(&mut self) {
@@ -498,7 +497,6 @@ impl App {
             self.start_line_number = previous.start_line_number;
             self.start_index = previous.start_index;
             self.start_of_line = previous.start_of_line;
-            self.end_of_line = previous.end_of_line;
             self.refresh_content();
         }
     }
@@ -514,7 +512,6 @@ impl App {
             self.start_line_number = next.start_line_number;
             self.start_index = next.start_index;
             self.start_of_line = next.start_of_line;
-            self.end_of_line = next.end_of_line;
             self.refresh_content();
         }
     }
@@ -597,13 +594,12 @@ impl App {
             } else {
                 self.row_number = rows;
                 self.line_column = remainder;
+                let end_of_line = self.start_of_line + self.window_width;
                 if self.line_column < self.start_of_line {
                     let gap = self.start_of_line - self.line_column;
                     self.start_of_line -= gap;
-                    self.end_of_line -= gap;
-                } else if self.line_column > self.end_of_line {
-                    let gap = self.line_column - self.end_of_line;
-                    self.end_of_line += gap;
+                } else if self.line_column > end_of_line {
+                    let gap = self.line_column - end_of_line;
                     self.start_of_line += gap;
                 }
                 self.column_number = self.line_column - self.start_of_line;
@@ -733,7 +729,6 @@ struct UndoRedoState {
     row_number: usize,
     column_number: usize,
     start_of_line: usize,
-    end_of_line: usize,
 }
 #[derive(Debug)]
 pub struct TextEditorLine {
