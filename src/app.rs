@@ -603,6 +603,17 @@ impl App {
                     self.start_of_line += gap;
                 }
                 self.column_number = self.line_column - self.start_of_line;
+                let line = self.lines[self.row_number];
+                let end = line.start_in_buffer + line.length;
+                if line.width > self.start_of_line {
+                    let suffix_width = line.width - self.start_of_line;
+                    let (_, suffix_width_truncated) = (&self.buffer[line.start_in_buffer..end])
+                        .unicode_truncate_start(suffix_width);
+                    if suffix_width_truncated < suffix_width {
+                        self.column_number -= suffix_width - suffix_width_truncated;
+                    }
+                }
+
                 self.col_hint = remainder;
                 return;
             }
@@ -712,7 +723,7 @@ enum Mode {
     Exiting,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone,Copy,Debug, PartialEq)]
 enum LineType {
     Independent,
     Start,
@@ -730,7 +741,7 @@ struct UndoRedoState {
     column_number: usize,
     start_of_line: usize,
 }
-#[derive(Debug)]
+#[derive(Clone,Copy,Debug)]
 pub struct TextEditorLine {
     start_in_buffer: usize,
     length: usize,
