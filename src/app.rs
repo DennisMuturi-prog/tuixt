@@ -580,9 +580,13 @@ impl App {
             .unicode_truncate(self.line_column);
         sum += before_cursor.len();
         cumulative_width += before_cursor_width;
-        if before_cursor_width < self.line_column {
-            self.column_number -= self.line_column - before_cursor_width;
-        }
+        let end = current_line.start_in_buffer + current_line.length;
+        let suffix_width = current_line.width - self.start_of_line;
+        let (_, suffix_width_truncated) =
+            (&self.buffer[current_line.start_in_buffer..end]).unicode_truncate_start(suffix_width);
+        if suffix_width_truncated < suffix_width {
+            self.column_number -= suffix_width - suffix_width_truncated;
+        } 
         self.line_column = before_cursor_width;
         self.index = sum + self.start_index;
         self.char_pos = cumulative_width;
