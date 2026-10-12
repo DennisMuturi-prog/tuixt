@@ -483,7 +483,7 @@ impl App {
             row_number: self.row_number,
             column_number: self.column_number,
             start_of_line: self.start_of_line,
-            char_pos:self.char_pos
+            char_pos: self.char_pos,
         }
     }
     fn undo(&mut self) {
@@ -719,7 +719,7 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
         offset += line.len();
         if offset < buf.len() && buf.as_bytes()[offset] == b'\n' {
             offset += 1;
-        } else {
+        } else if offset < buf.len() && buf.as_bytes()[offset] == b'\r' {
             offset += 2;
             if let Some(last) = lines.last_mut() {
                 last.length += 1;
@@ -762,7 +762,7 @@ struct UndoRedoState {
     row_number: usize,
     column_number: usize,
     start_of_line: usize,
-    char_pos:usize
+    char_pos: usize,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TextEditorLine {
