@@ -318,6 +318,7 @@ impl App {
                             self.char_pos += char_to_pass.width();
                             self.compute_row_and_col_from_char_pos();
                         }
+                        // i did this because my right arrow button is damaged,so am i using the page down to simulate it
                         KeyCode::PageDown => {
                             if self.row_number + 1 >= self.window_height
                                 && self.column_number + 1 >= self.lines[self.row_number].length()
@@ -501,6 +502,7 @@ impl App {
             self.start_line_number = previous.start_line_number;
             self.start_index = previous.start_index;
             self.start_of_line = previous.start_of_line;
+            self.char_pos =previous.char_pos;
             self.refresh_content();
         }
     }
@@ -516,6 +518,7 @@ impl App {
             self.start_line_number = next.start_line_number;
             self.start_index = next.start_index;
             self.start_of_line = next.start_of_line;
+            self.char_pos = next.char_pos;
             self.refresh_content();
         }
     }

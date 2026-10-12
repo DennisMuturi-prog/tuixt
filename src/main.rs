@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::{cursor::SetCursorStyle, execute, terminal::size};
+use crossterm::{cursor::SetCursorStyle, event::{DisableBracketedPaste, EnableBracketedPaste}, execute, terminal::size};
 use tuixt::{app::{App, compute_line_starts_with_no_wrap}, piece_tree::PieceTree};
 
 fn main() -> io::Result<()> {
@@ -12,6 +12,7 @@ fn main() -> io::Result<()> {
             return Err(err);
         }
     };
+    execute!(std::io::stdout(), EnableBracketedPaste)?;
     let mut app = App::new(
         "",
         (initial_window_height-6) as usize,
@@ -19,6 +20,7 @@ fn main() -> io::Result<()> {
         false,
     );
     ratatui::run(|terminal| app.run(terminal))?;
+    execute!(std::io::stdout(), DisableBracketedPaste)?;
     execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape)
 }
 fn testing_if_lines_are_being_created_correctly() {
