@@ -483,6 +483,7 @@ impl App {
             row_number: self.row_number,
             column_number: self.column_number,
             start_of_line: self.start_of_line,
+            char_pos:self.char_pos
         }
     }
     fn undo(&mut self) {
@@ -761,6 +762,7 @@ struct UndoRedoState {
     row_number: usize,
     column_number: usize,
     start_of_line: usize,
+    char_pos:usize
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TextEditorLine {
