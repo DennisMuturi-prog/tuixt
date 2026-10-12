@@ -398,7 +398,7 @@ impl App {
         Ok(())
     }
     fn compute_next_line_col(&mut self) {
-        self.line_column = min(self.col_hint, self.lines[self.row_number].length);
+        self.line_column = min(self.col_hint, self.lines[self.row_number].width);
         self.start_of_line = self.line_column.saturating_sub(self.window_width);
         self.column_number = self.line_column - self.start_of_line;
     }
@@ -546,27 +546,45 @@ impl App {
     }
     fn compute_index_from_row_and_col(&mut self) {
         let mut sum = 0;
+        let mut cumulative_width = 0;
         for line in self.lines.iter().take(self.row_number) {
             match line.line_type {
                 LineType::Independent => {
                     sum += line.length();
+                    cumulative_width += line.width + 1;
                 }
                 LineType::Start => {
                     sum += line.length();
+
+                    cumulative_width += line.width;
                 }
                 LineType::Between => {
                     sum -= line.length();
+
+                    cumulative_width += line.width;
                 }
                 LineType::End => {
                     sum += line.length();
+                    cumulative_width += line.width + 1;
                 }
                 LineType::Empty => {
                     sum += line.length();
+                    cumulative_width += line.width;
                 }
             }
         }
-        sum += self.line_column;
+        let current_line = self.lines[self.row_number];
+        let (before_cursor, before_cursor_width) = (&self.buffer
+            [current_line.start_in_buffer..current_line.start_in_buffer + current_line.length])
+            .unicode_truncate(self.line_column);
+        sum += before_cursor.len();
+        cumulative_width += before_cursor_width;
+        if before_cursor_width < self.line_column {
+            self.column_number -= self.line_column - before_cursor_width;
+        }
+        self.line_column = before_cursor_width;
         self.index = sum + self.start_index;
+        self.char_pos = cumulative_width;
     }
     fn compute_row_and_col_from_char_pos(&mut self) {
         let mut remainder = self.char_pos;
@@ -702,6 +720,9 @@ pub fn compute_line_starts_with_no_wrap(buf: &str, lines: &mut Vec<TextEditorLin
             offset += 1;
         } else {
             offset += 2;
+            if let Some(last) = lines.last_mut() {
+                last.length += 1;
+            }
         }
     }
     if buf.as_bytes()[buf.len() - 1] == b'\n' {
@@ -723,7 +744,7 @@ enum Mode {
     Exiting,
 }
 
-#[derive(Clone,Copy,Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum LineType {
     Independent,
     Start,
@@ -741,7 +762,7 @@ struct UndoRedoState {
     column_number: usize,
     start_of_line: usize,
 }
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TextEditorLine {
     start_in_buffer: usize,
     length: usize,
