@@ -398,8 +398,11 @@ impl App {
         Ok(())
     }
     fn compute_next_line_col(&mut self) {
+        let previous_line_column = self.line_column;
         self.line_column = min(self.col_hint, self.lines[self.row_number].width);
-        self.start_of_line = self.line_column.saturating_sub(self.window_width);
+        if self.line_column != previous_line_column {
+            self.start_of_line = self.line_column.saturating_sub(self.window_width);
+        } 
         self.column_number = self.line_column - self.start_of_line;
     }
     fn get_line_numbers_gutter(&self) -> String {
@@ -586,7 +589,7 @@ impl App {
             (&self.buffer[current_line.start_in_buffer..end]).unicode_truncate_start(suffix_width);
         if suffix_width_truncated < suffix_width {
             self.column_number -= suffix_width - suffix_width_truncated;
-        } 
+        }
         self.line_column = before_cursor_width;
         self.index = sum + self.start_index;
         self.char_pos = cumulative_width;
