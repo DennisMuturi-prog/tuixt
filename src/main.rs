@@ -1,10 +1,9 @@
 use std::io;
 
 use crossterm::{cursor::SetCursorStyle, event::{DisableBracketedPaste, EnableBracketedPaste}, execute, terminal::size};
-use tuixt::{app::{App, compute_line_starts_with_no_wrap}, piece_tree::PieceTree};
+use tuixt::app::App;
 
 fn main() -> io::Result<()> {
-    // testing_if_lines_are_being_created_correctly();
     let (initial_window_width, initial_window_height) = match size() {
         Ok(dimensions) => dimensions,
         Err(err) => {
@@ -23,20 +22,4 @@ fn main() -> io::Result<()> {
     execute!(std::io::stdout(), DisableBracketedPaste)?;
     execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape)
 }
-fn testing_if_lines_are_being_created_correctly() {
-    let mut piece_tree = PieceTree::default();
-    piece_tree.insert("one", 0);
-    
-    piece_tree.delete(2, 1);
-    piece_tree.delete(1, 1);
-    piece_tree.delete(0, 1);
-    // piece_tree.insert("\n", 11);
-    let mut buffer = String::new();
-    piece_tree.get_lines_text(0, 5, &mut buffer);
 
-    let mut lines = Vec::new();
-    compute_line_starts_with_no_wrap(&buffer, &mut lines);
-    println!("lines are {:?}", lines);
-    println!("buffer is {}", buffer);
-    panic!("hello")
-}
