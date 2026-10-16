@@ -290,6 +290,7 @@ impl App {
                                 let byte_width = local_index - starting_of_this_char + 1;
                                 self.index -= byte_width;
                             }
+                            self.col_hint = self.line_column;
                             self.compute_new_horizontal_start_line();
                         }
                         KeyCode::Right => {
@@ -319,6 +320,8 @@ impl App {
                                 let byte_width = ending_of_this_char - local_index;
                                 self.index = min(content_len, self.index + byte_width);
                             }
+
+                            self.col_hint = self.line_column;
 
                             self.compute_new_horizontal_start_line();
                         }
@@ -350,6 +353,7 @@ impl App {
                                 let byte_width = ending_of_this_char - local_index;
                                 self.index = min(content_len, self.index + byte_width);
                             }
+                            self.col_hint = self.line_column;
 
                             self.compute_new_horizontal_start_line();
                         }
@@ -383,7 +387,7 @@ impl App {
                                     self.compute_index_from_row_and_col();
                                 }
                             } else {
-                                self.row_number = self.row_number + 1;
+                                self.row_number = min(self.row_number + 1, self.lines.len() - 1);
                                 self.compute_next_line_col();
                                 self.compute_index_from_row_and_col();
                             }
@@ -633,6 +637,7 @@ impl App {
         self.line_column = (&self.buffer
             [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
             .width();
+        self.col_hint=self.line_column;
     }
     fn compute_new_horizontal_start_line(&mut self) {
         let end_of_line = self.start_of_line + self.window_width;
