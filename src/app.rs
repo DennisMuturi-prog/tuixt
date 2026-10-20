@@ -560,7 +560,12 @@ impl App {
         let mut line_number_display = self.start_line_number + 1;
         let mut gutter = String::with_capacity(self.lines.len() * 2);
 
-        for line in self.lines.iter().take(self.window_height) {
+        for line in self
+            .lines
+            .iter()
+            .skip(self.start_pos_into_lines)
+            .take(self.window_height)
+        {
             match line.line_type {
                 LineType::Independent => {
                     gutter.push_str(&line_number_display.to_string());
@@ -569,13 +574,13 @@ impl App {
                 }
                 LineType::Start => {
                     gutter.push_str(&line_number_display.to_line().to_string());
-                    line_number_display += 1;
                     gutter.push('\n');
                 }
                 LineType::Between => {
                     gutter.push_str(" \n");
                 }
                 LineType::End => {
+                    line_number_display += 1;
                     gutter.push_str(" \n");
                 }
                 LineType::Empty => {
@@ -589,7 +594,7 @@ impl App {
     }
     fn get_display_content(&self) -> Vec<Line<'_>> {
         let mut visible_lines = Vec::with_capacity(self.lines.len());
-        for line in self.lines.iter() {
+        for line in self.lines.iter().skip(self.start_pos_into_lines) {
             match line.line_type {
                 LineType::Empty => {
                     visible_lines.push(Line::from(""));
@@ -700,35 +705,39 @@ impl App {
         self.buffer.truncate(self.start_index);
         self.piece_tree.get_lines_text(
             self.start_line_number,
-            self.window_height*2,
+            self.window_height + 1,
             &mut self.buffer,
         );
-        let mut i=self.start_pos_into_lines;
-        loop{
-            match self.lines[i].line_type{
+        let mut i = self.start_pos_into_lines;
+        loop {
+            match self.lines[i].line_type {
                 LineType::Independent => {
                     break;
-                },
+                }
                 LineType::Start => {
                     break;
-                },
-                LineType::Between =>{
-                    i-=1;
-                },
+                }
+                LineType::Between => {
+                    i -= 1;
+                }
                 LineType::End => {
-                    i-=1;
-                },
+                    i -= 1;
+                }
                 LineType::Empty => {
-                    i-=1;
-                },
+                    if i != 0 {
+                        i -= 1;
+                    } else {
+                        break;
+                    }
+                }
             }
-            
         }
         self.lines.truncate(i);
+        self.no_of_hard_lines_queried = self.start_line_number;
         if self.wrap {
-            self.compute_line_starts_with_wrap();
+            self.compute_extra_line_starts_with_wrap(self.start_index);
         } else {
-            self.compute_line_starts_with_no_wrap();
+            self.compute_extra_line_starts_with_no_wrap(self.start_index);
         }
     }
     fn request_more_lines(&mut self) {
@@ -784,13 +793,39 @@ impl App {
         let mut sum = 0;
         let mut current_position = 0;
         let local_index = self.index - self.start_index;
-        for line in self.lines.iter() {
+        let mut i = self.start_pos_into_lines;
+        let mut hard_lines_passed = 0;
+        loop {
+            match self.lines[i].line_type {
+                LineType::Independent => {
+                    break;
+                }
+                LineType::Start => {
+                    break;
+                }
+                LineType::Between => {
+                    i -= 1;
+                }
+                LineType::End => {
+                    i -= 1;
+                }
+                LineType::Empty => {
+                    if i != 0 {
+                        i -= 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        for line in self.lines.iter().skip(i) {
             if sum + line.length() > local_index {
                 break;
             }
             match line.line_type {
                 LineType::Independent => {
                     sum += line.length();
+                    hard_lines_passed += 1;
                 }
                 LineType::Start => {
                     sum += line.length();
@@ -798,19 +833,28 @@ impl App {
                 LineType::Between => sum += line.length(),
                 LineType::End => {
                     sum += line.length();
+                    hard_lines_passed += 1;
                 }
                 LineType::Empty => {
-                    sum += line.length();
+                    break;
                 }
             }
             current_position += 1;
         }
-        self.row_number = current_position - self.start_pos_into_lines;
-        let current_line = self.lines[self.row_number];
+        self.row_number = current_position - (self.start_pos_into_lines - i);
+        let current_line = self.lines[self.start_pos_into_lines + self.row_number];
         let offset_in_line = local_index - sum;
         self.line_column = (&self.buffer
             [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
             .width();
+        if self.row_number >= self.window_height {
+            self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
+            self.start_line_number += hard_lines_passed;
+            self.start_index = self
+                .piece_tree
+                .get_start_offset_of_a_line(self.start_line_number);
+            self.row_number = 0;
+        }
         self.col_hint = self.line_column;
     }
     fn compute_new_horizontal_start_line(&mut self) {
