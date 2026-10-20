@@ -594,7 +594,7 @@ impl App {
     }
     fn get_display_content(&self) -> Vec<Line<'_>> {
         let mut visible_lines = Vec::with_capacity(self.lines.len());
-        for line in self.lines.iter().skip(self.start_pos_into_lines) {
+        for line in self.lines.iter().skip(self.start_pos_into_lines).take(self.window_height) {
             match line.line_type {
                 LineType::Empty => {
                     visible_lines.push(Line::from(""));
@@ -844,9 +844,14 @@ impl App {
         self.row_number = current_position - (self.start_pos_into_lines - i);
         let current_line = self.lines[self.start_pos_into_lines + self.row_number];
         let offset_in_line = local_index - sum;
-        self.line_column = (&self.buffer
-            [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
-            .width();
+        if matches!(current_line.line_type, LineType::Empty) {
+            self.line_column=0;
+        } else {
+            self.line_column = (&self.buffer
+                [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
+                .width();
+        }
+
         if self.row_number >= self.window_height {
             self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
             self.start_line_number += hard_lines_passed;
@@ -867,7 +872,7 @@ impl App {
             self.start_of_line += gap;
         }
         self.column_number = self.line_column - self.start_of_line;
-        let line = self.lines[self.row_number];
+        let line = self.lines[self.start_pos_into_lines + self.row_number];
         let end = line.start_in_buffer + line.length;
         if line.width > self.start_of_line {
             let suffix_width = line.width - self.start_of_line;
@@ -1018,7 +1023,7 @@ impl App {
         }
         self.no_of_hard_lines_queried = no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
-            && self.start_index + self.buffer.len() == self.piece_tree.get_tree_len()
+            && self.start_index + buf.len() == self.piece_tree.get_tree_len()
         {
             let txt_line = TextEditorLine {
                 start_in_buffer: 0,
@@ -1080,7 +1085,7 @@ impl App {
         }
         self.no_of_hard_lines_queried += no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
-            && self.start_index + self.buffer.len() == self.piece_tree.get_tree_len()
+            && self.start_index + buf.len() == self.piece_tree.get_tree_len()
         {
             let txt_line = TextEditorLine {
                 start_in_buffer: 0,
