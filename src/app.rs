@@ -712,7 +712,7 @@ impl App {
         self.compute_new_horizontal_start_line();
     }
     fn refresh_to_append_content(&mut self, new_hard_lines_created: usize) {
-        self.buffer.truncate(self.start_line_index);
+        self.buffer.truncate(self.start_line_index-self.buffer_start_index);
         let buffer_before_append_len = self.buffer.len();
         self.piece_tree.get_lines_text(
             self.start_line_number,
@@ -1139,7 +1139,7 @@ impl App {
         }
         self.no_of_hard_lines_queried = no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
-            && self.buffer_start_index + buf.len() == self.piece_tree.get_tree_len()
+            && self.start_line_index + buf.len() == self.piece_tree.get_tree_len()
         {
             let txt_line = TextEditorLine {
                 start_in_buffer: 0,
@@ -1210,7 +1210,7 @@ impl App {
         }
         self.no_of_hard_lines_queried = no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
-            && self.buffer_start_index + buf.len() == self.piece_tree.get_tree_len()
+            && self.start_line_index + buf.len() == self.piece_tree.get_tree_len()
         {
             let txt_line = TextEditorLine {
                 start_in_buffer: 0,
