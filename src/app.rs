@@ -648,9 +648,18 @@ impl App {
         let current_lf_count = self.piece_tree.get_line_feed_count();
         let removed_lines_count = previous_lf_count - current_lf_count;
         self.index = offset;
-        self.refresh_to_append_content(0);
-        self.compute_position_from_index();
-        self.compute_new_horizontal_start_line();
+        if self.index >= self.buffer_start_index {
+            if self.index >= self.start_line_index {
+                self.refresh_to_append_content(0);
+                self.compute_position_from_index();
+                self.compute_new_horizontal_start_line();
+            } else {
+                self.compute_position_due_to_deletion();
+                self.refresh_to_append_content(0);
+                self.compute_new_horizontal_start_line();
+            }
+        } else {
+        }
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -821,54 +830,81 @@ impl App {
         self.line_column = before_cursor_width;
         self.index = sum + self.start_line_index;
     }
+    fn compute_position_due_to_deletion(&mut self) {
+        let mut hard_lines_passed = match self.lines[self.start_pos_into_lines].line_type {
+            LineType::Empty => 1,
+            _ => 0,
+        };
+        let mut i = self.start_pos_into_lines - 1;
+        let mut back_offset = self.start_line_index;
+
+        loop {
+            back_offset -= self.lines[i].length();
+            if back_offset <= self.index {
+                break;
+            }
+            match self.lines[i].line_type {
+                LineType::Independent => {
+                    hard_lines_passed += 1;
+                }
+                LineType::Start => {
+                    hard_lines_passed += 1;
+                }
+                LineType::Between => {}
+                LineType::End => {}
+                LineType::Empty => {
+                    hard_lines_passed += 1;
+                }
+            }
+            i -= 1;
+        }
+        let start = back_offset - self.buffer_start_index;
+        let end = self.index - self.buffer_start_index;
+        self.line_column = (&self.buffer[start..end]).width();
+        self.start_pos_into_lines = i;
+        let new_length = self.index - back_offset;
+        self.row_number = 0;
+        let new_line_type = match self.lines[i].line_type {
+            LineType::Independent => LineType::Independent,
+            LineType::Start => LineType::Independent,
+            LineType::Between => LineType::End,
+            LineType::End => LineType::End,
+            LineType::Empty => LineType::Empty,
+        };
+        self.lines[i].line_type = new_line_type;
+        self.lines[i].length = new_length;
+        self.lines[i].width = self.line_column;
+        loop {
+            match self.lines[i].line_type {
+                LineType::Independent => {
+                    break;
+                }
+                LineType::Start => {
+                    break;
+                }
+                LineType::Between => {
+                    i -= 1;
+                    back_offset -= self.lines[i].length();
+                }
+                LineType::End => {
+                    i -= 1;
+                    back_offset -= self.lines[i].length();
+                }
+                LineType::Empty => {
+                    break;
+                }
+            }
+        }
+        self.start_line_number -= hard_lines_passed;
+        self.start_line_index = back_offset;
+    }
     fn compute_position_from_index(&mut self) {
         let mut sum = 0;
         let mut current_position = 0;
-        if self.index < self.start_line_index {
-            assert!(
-                self.index >= self.buffer_start_index,
-                "index must not be less than start buffer index"
-            );
-            let mut i = self.start_pos_into_lines - 1;
-            let mut back_offset = self.start_line_index;
-            loop {
-                back_offset -= self.lines[i].length();
-                if back_offset <= self.index {
-                    break;
-                }
-                i -= 1;
-            }
-            let start=back_offset-self.buffer_start_index;
-            let end=self.index-self.buffer_start_index;
-            self.line_column=(&self.buffer[start..end]).width();
-            self.start_pos_into_lines = i;
-            loop {
-                match self.lines[i].line_type {
-                    LineType::Independent => {
-                        break;
-                    }
-                    LineType::Start => {
-                        break;
-                    }
-                    LineType::Between => {
-                        i -= 1;
-                        back_offset-=self.lines[i].length();
-                    }
-                    LineType::End => {
-                        i -= 1; 
-                        back_offset-=self.lines[i].length();
-                    }
-                    LineType::Empty => {
-                        break;
-                    }
-                }
-            }
-            self.start_line_number=i;
-            self.start_line_index=back_offset;
-            return;
-        }
+
         let local_index = self.index - self.start_line_index;
-        let mut i = self.start_pos_into_lines;
+        let mut i = min(self.lines.len()-1,self.start_pos_into_lines);
+        self.start_pos_into_lines=i;
         let mut hard_lines_passed = 0;
         loop {
             match self.lines[i].line_type {
