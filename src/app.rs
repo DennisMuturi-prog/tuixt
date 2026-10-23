@@ -356,6 +356,9 @@ impl App {
                         }
                         // i did this because my right arrow button is damaged,so am i using the page down to simulate it
                         KeyCode::Right | KeyCode::PageDown => {
+                            if self.index == self.piece_tree.get_tree_len(){
+                                return Ok(());
+                            }
                             if self.line_column
                                 >= self.lines[self.start_pos_into_lines + self.row_number].width
                                 && self.row_number + 1 >= self.window_height
