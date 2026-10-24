@@ -356,7 +356,7 @@ impl App {
                         }
                         // i did this because my right arrow button is damaged,so am i using the page down to simulate it
                         KeyCode::Right | KeyCode::PageDown => {
-                            if self.index == self.piece_tree.get_tree_len(){
+                            if self.index == self.piece_tree.get_tree_len() {
                                 return Ok(());
                             }
                             if self.line_column
@@ -652,15 +652,9 @@ impl App {
         let removed_lines_count = previous_lf_count - current_lf_count;
         self.index = offset;
         if self.index >= self.buffer_start_index {
-            if self.index >= self.start_line_index {
-                self.refresh_to_append_content(0);
-                self.compute_position_from_index();
-                self.compute_new_horizontal_start_line();
-            } else {
-                self.compute_position_due_to_deletion();
-                self.refresh_to_append_content(0);
-                self.compute_new_horizontal_start_line();
-            }
+            self.compute_position_from_index_due_to_deletion();
+            self.refresh_to_append_content(0);
+            self.compute_new_horizontal_start_line();
         } else {
         }
     }
@@ -711,11 +705,12 @@ impl App {
         let new_hard_lines_added = current_lf_count - previous_lf_count;
         self.index = offset + new_content.len();
         self.refresh_to_append_content(new_hard_lines_added);
-        self.compute_position_from_index();
+        self.compute_position_from_index_due_to_insertion();
         self.compute_new_horizontal_start_line();
     }
     fn refresh_to_append_content(&mut self, new_hard_lines_created: usize) {
-        self.buffer.truncate(self.start_line_index-self.buffer_start_index);
+        self.buffer
+            .truncate(self.start_line_index - self.buffer_start_index);
         let buffer_before_append_len = self.buffer.len();
         self.piece_tree.get_lines_text(
             self.start_line_number,
@@ -832,82 +827,12 @@ impl App {
         }
         self.line_column = before_cursor_width;
         self.index = sum + self.start_line_index;
-    }
-    fn compute_position_due_to_deletion(&mut self) {
-        let mut hard_lines_passed = match self.lines[self.start_pos_into_lines].line_type {
-            LineType::Empty => 1,
-            _ => 0,
-        };
-        let mut i = self.start_pos_into_lines - 1;
-        let mut back_offset = self.start_line_index;
-
-        loop {
-            back_offset -= self.lines[i].length();
-            if back_offset <= self.index {
-                break;
-            }
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    hard_lines_passed += 1;
-                }
-                LineType::Start => {
-                    hard_lines_passed += 1;
-                }
-                LineType::Between => {}
-                LineType::End => {}
-                LineType::Empty => {
-                    hard_lines_passed += 1;
-                }
-            }
-            i -= 1;
-        }
-        let start = back_offset - self.buffer_start_index;
-        let end = self.index - self.buffer_start_index;
-        self.line_column = (&self.buffer[start..end]).width();
-        self.start_pos_into_lines = i;
-        let new_length = self.index - back_offset;
-        self.row_number = 0;
-        let new_line_type = match self.lines[i].line_type {
-            LineType::Independent => LineType::Independent,
-            LineType::Start => LineType::Independent,
-            LineType::Between => LineType::End,
-            LineType::End => LineType::End,
-            LineType::Empty => LineType::Empty,
-        };
-        self.lines[i].line_type = new_line_type;
-        self.lines[i].length = new_length;
-        self.lines[i].width = self.line_column;
-        loop {
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    break;
-                }
-                LineType::Start => {
-                    break;
-                }
-                LineType::Between => {
-                    i -= 1;
-                    back_offset -= self.lines[i].length();
-                }
-                LineType::End => {
-                    i -= 1;
-                    back_offset -= self.lines[i].length();
-                }
-                LineType::Empty => {
-                    break;
-                }
-            }
-        }
-        self.start_line_number -= hard_lines_passed;
-        self.start_line_index = back_offset;
-    }
-    fn compute_position_from_index(&mut self) {
+    } 
+    fn compute_position_from_index_due_to_insertion(&mut self) {
         let mut sum = 0;
         let mut current_position = 0;
-
         let local_index = self.index - self.start_line_index;
-        let mut i = min(self.lines.len()-1,self.start_pos_into_lines);
-        self.start_pos_into_lines=i;
+        let mut i = self.start_pos_into_lines;
         let mut hard_lines_passed = 0;
         loop {
             match self.lines[i].line_type {
@@ -951,8 +876,9 @@ impl App {
             }
             current_position += 1;
         }
-        self.row_number = current_position - (self.start_pos_into_lines - i);
-        let current_line = self.lines[self.start_pos_into_lines + self.row_number];
+        let curr_pos_into_lines = i + current_position;
+        self.row_number = curr_pos_into_lines - self.start_pos_into_lines;
+        let current_line = self.lines[curr_pos_into_lines];
         let offset_in_line = local_index - sum;
         if matches!(current_line.line_type, LineType::Empty) {
             self.line_column = 0;
@@ -962,6 +888,123 @@ impl App {
                 .width();
         }
 
+        if self.row_number >= self.window_height {
+            self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
+            self.start_line_number += hard_lines_passed;
+            self.start_line_index = self
+                .piece_tree
+                .get_start_offset_of_a_line(self.start_line_number);
+            self.row_number = 0;
+        }
+        self.col_hint = self.line_column;
+    }
+    fn compute_position_from_index_due_to_deletion(&mut self) {
+        let mut sum = 0;
+        let mut current_position = 0;
+        let mut i = self.start_pos_into_lines;
+        let mut hard_lines_passed = 0;
+        loop {
+            match self.lines[i].line_type {
+                LineType::Independent => {
+                    break;
+                }
+                LineType::Start => {
+                    break;
+                }
+                LineType::Between => {
+                    i -= 1;
+                }
+                LineType::End => {
+                    i -= 1;
+                }
+                LineType::Empty => {
+                    break;
+                }
+            }
+        }
+        if self.index < self.start_line_index {
+            let mut back_offset = self.start_line_index;
+            i -= 1;
+            loop {
+                back_offset -= self.lines[i].length();
+                if back_offset <= self.index {
+                    break;
+                }
+                match self.lines[i].line_type {
+                    LineType::Independent => {
+                        hard_lines_passed += 1;
+                    }
+                    LineType::Start => {
+                        hard_lines_passed += 1;
+                    }
+                    LineType::Between => {}
+                    LineType::End => {}
+                    LineType::Empty => {
+                        hard_lines_passed += 1;
+                    }
+                }
+                i -= 1;
+            }
+            loop {
+                match self.lines[i].line_type {
+                    LineType::Independent => {
+                        break;
+                    }
+                    LineType::Start => {
+                        break;
+                    }
+                    LineType::Between => {
+                        i -= 1;
+                    }
+                    LineType::End => {
+                        i -= 1;
+                    }
+                    LineType::Empty => {
+                        break;
+                    }
+                }
+            }
+            self.start_line_number -= hard_lines_passed;
+            self.start_pos_into_lines=i;
+            self.start_line_index = self
+                .piece_tree
+                .get_start_offset_of_a_line(self.start_line_number);
+        }
+        let local_index = self.index - self.start_line_index;
+        for line in self.lines.iter().skip(i) {
+            if sum + line.length() > local_index {
+                break;
+            }
+            match line.line_type {
+                LineType::Independent => {
+                    sum += line.length();
+                    hard_lines_passed += 1;
+                }
+                LineType::Start => {
+                    sum += line.length();
+                }
+                LineType::Between => sum += line.length(),
+                LineType::End => {
+                    sum += line.length();
+                    hard_lines_passed += 1;
+                }
+                LineType::Empty => {
+                    break;
+                }
+            }
+            current_position += 1;
+        }
+        let curr_pos_into_lines = i + current_position;
+        let current_line = self.lines[curr_pos_into_lines];
+        let offset_in_line = local_index - sum;
+        if matches!(current_line.line_type, LineType::Empty) {
+            self.line_column = 0;
+        } else {
+            self.line_column = (&self.buffer
+                [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
+                .width();
+        }
+        self.row_number=curr_pos_into_lines-self.start_pos_into_lines;
         if self.row_number >= self.window_height {
             self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
             self.start_line_number += hard_lines_passed;
