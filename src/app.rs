@@ -32,7 +32,7 @@ pub struct App {
     piece_tree: PieceTree,
     lines: Vec<TextEditorLine>,
     visible_top_pos_into_lines: usize,
-    start_line_no_pos_into_lines:usize,
+    nearest_anchor_start_line_pos: usize,
     no_of_hard_lines_queried: usize,
     wrap: bool,
     window_height: usize,
@@ -282,7 +282,7 @@ impl App {
                                 self.buffer_start_index = self
                                     .piece_tree
                                     .get_start_offset_of_a_line(self.start_line_number);
-                                self.start_line_no_pos_into_lines=0;
+                                self.nearest_anchor_start_line_pos = 0;
                                 self.start_line_index = self.buffer_start_index;
                                 self.refresh_content_for_current_visible_window();
                                 if matches!(self.lines[0].line_type, LineType::Independent) {
@@ -294,7 +294,8 @@ impl App {
                                             break;
                                         }
                                     }
-                                    self.line_column = self.lines[self.visible_top_pos_into_lines].width;
+                                    self.line_column =
+                                        self.lines[self.visible_top_pos_into_lines].width;
                                 }
                                 self.index -= 1;
                                 let local_index = self.index - self.buffer_start_index;
@@ -306,15 +307,49 @@ impl App {
                                 && (self.visible_top_pos_into_lines as i32 - 1) >= 0
                             {
                                 self.visible_top_pos_into_lines -= 1;
-                                self.line_column = self.lines[self.visible_top_pos_into_lines].width;
+                                self.line_column =
+                                    self.lines[self.visible_top_pos_into_lines].width;
                                 if matches!(
                                     self.lines[self.visible_top_pos_into_lines].line_type,
                                     LineType::Independent
                                 ) || matches!(
                                     self.lines[self.visible_top_pos_into_lines].line_type,
                                     LineType::End
-                                ) { 
-                                    self.start_line_no_pos_into_lines=self.visible_top_pos_into_lines;
+                                ) {
+                                    self.start_line_number -= 1;
+                                    self.start_line_index = self
+                                        .piece_tree
+                                        .get_start_offset_of_a_line(self.start_line_number);
+                                    if matches!(
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
+                                        LineType::End
+                                    ) {
+                                        let mut i = self.visible_top_pos_into_lines;
+                                        loop {
+                                            match self.lines[i].line_type {
+                                                LineType::Independent => {
+                                                    break;
+                                                }
+                                                LineType::Start => {
+                                                    break;
+                                                }
+                                                LineType::Between => {
+                                                    i -= 1;
+                                                }
+                                                LineType::End => {
+                                                    i -= 1;
+                                                }
+                                                LineType::Empty => {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        self.nearest_anchor_start_line_pos = i;
+                                    } else {
+                                        self.nearest_anchor_start_line_pos =
+                                            self.visible_top_pos_into_lines;
+                                    }
+
                                     self.index -= 1;
                                     let local_index = self.index - self.buffer_start_index;
                                     if self.buffer.as_bytes()[local_index - 1] == b'\r' {
@@ -323,8 +358,9 @@ impl App {
                                 }
                             } else if self.line_column == 0 {
                                 self.row_number -= 1;
-                                self.line_column =
-                                    self.lines[self.visible_top_pos_into_lines + self.row_number].width;
+                                self.line_column = self.lines
+                                    [self.visible_top_pos_into_lines + self.row_number]
+                                    .width;
                                 if matches!(
                                     self.lines[self.visible_top_pos_into_lines + self.row_number]
                                         .line_type,
@@ -359,19 +395,23 @@ impl App {
                                 return Ok(());
                             }
                             if self.line_column
-                                >= self.lines[self.visible_top_pos_into_lines + self.row_number].width
+                                >= self.lines[self.visible_top_pos_into_lines + self.row_number]
+                                    .width
                                 && self.row_number + 1 >= self.window_height
                             {
-                                if self.visible_top_pos_into_lines + self.window_height < self.lines.len()
+                                if self.visible_top_pos_into_lines + self.window_height
+                                    < self.lines.len()
                                 {
                                     self.line_column = 0;
                                     self.visible_top_pos_into_lines += 1;
                                     if matches!(
-                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
+                                        self.lines
+                                            [self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::End
                                     ) || matches!(
-                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
+                                        self.lines
+                                            [self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::Independent
                                     ) {
@@ -393,6 +433,8 @@ impl App {
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
+                                        self.nearest_anchor_start_line_pos =
+                                            self.visible_top_pos_into_lines;
                                     }
                                 } else {
                                     let total_lines = self.piece_tree.get_line_feed_count() + 1;
@@ -419,11 +461,14 @@ impl App {
                                             self.start_line_index = self
                                                 .piece_tree
                                                 .get_start_offset_of_a_line(self.start_line_number);
+                                            self.nearest_anchor_start_line_pos =
+                                                self.visible_top_pos_into_lines;
                                         }
                                     }
                                 }
                             } else if self.line_column
-                                >= self.lines[self.visible_top_pos_into_lines + self.row_number].width
+                                >= self.lines[self.visible_top_pos_into_lines + self.row_number]
+                                    .width
                             {
                                 if self.visible_top_pos_into_lines + self.row_number + 1
                                     < self.lines.len()
@@ -431,11 +476,13 @@ impl App {
                                     self.row_number += 1;
                                     self.line_column = 0;
                                     if matches!(
-                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
+                                        self.lines
+                                            [self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::End
                                     ) || matches!(
-                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
+                                        self.lines
+                                            [self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::Independent
                                     ) {
@@ -475,7 +522,16 @@ impl App {
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
                                         self.start_line_index = self.buffer_start_index;
+                                        self.nearest_anchor_start_line_pos = 0;
                                         self.refresh_content_for_current_visible_window();
+                                        if matches!(self.lines[0].line_type, LineType::Start) {
+                                            for (i, line) in self.lines.iter().enumerate() {
+                                                if matches!(line.line_type, LineType::End) {
+                                                    self.visible_top_pos_into_lines = i;
+                                                    break;
+                                                }
+                                            }
+                                        }
                                         self.compute_next_line_col();
                                         self.compute_index_from_row_and_col();
                                     }
@@ -492,6 +548,35 @@ impl App {
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
+                                        if matches!(
+                                            self.lines[self.visible_top_pos_into_lines].line_type,
+                                            LineType::End
+                                        ) {
+                                            let mut i = self.visible_top_pos_into_lines;
+                                            loop {
+                                                match self.lines[i].line_type {
+                                                    LineType::Independent => {
+                                                        break;
+                                                    }
+                                                    LineType::Start => {
+                                                        break;
+                                                    }
+                                                    LineType::Between => {
+                                                        i -= 1;
+                                                    }
+                                                    LineType::End => {
+                                                        i -= 1;
+                                                    }
+                                                    LineType::Empty => {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            self.nearest_anchor_start_line_pos = i;
+                                        } else {
+                                            self.nearest_anchor_start_line_pos =
+                                                self.visible_top_pos_into_lines;
+                                        }
                                     }
                                     self.compute_next_line_col();
                                     self.compute_index_from_row_and_col();
@@ -504,7 +589,8 @@ impl App {
                         }
                         KeyCode::Down => {
                             if self.row_number + 1 >= self.window_height {
-                                if self.visible_top_pos_into_lines + self.window_height < self.lines.len()
+                                if self.visible_top_pos_into_lines + self.window_height
+                                    < self.lines.len()
                                 {
                                     self.visible_top_pos_into_lines += 1;
                                     if matches!(
@@ -518,6 +604,8 @@ impl App {
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
+                                        self.nearest_anchor_start_line_pos =
+                                            self.visible_top_pos_into_lines;
                                     }
                                     self.compute_next_line_col();
                                     self.compute_index_from_row_and_col();
@@ -539,6 +627,8 @@ impl App {
                                             self.start_line_index = self
                                                 .piece_tree
                                                 .get_start_offset_of_a_line(self.start_line_number);
+                                            self.nearest_anchor_start_line_pos =
+                                                self.visible_top_pos_into_lines;
                                         }
                                         self.compute_next_line_col();
                                         self.compute_index_from_row_and_col();
@@ -716,27 +806,7 @@ impl App {
             self.window_height + new_hard_lines_created,
             &mut self.buffer,
         );
-        let mut i = self.visible_top_pos_into_lines;
-        loop {
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    break;
-                }
-                LineType::Start => {
-                    break;
-                }
-                LineType::Between => {
-                    i -= 1;
-                }
-                LineType::End => {
-                    i -= 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
-            }
-        }
-        self.lines.truncate(i);
+        self.lines.truncate(self.nearest_anchor_start_line_pos);
         if self.wrap {
             self.compute_extra_line_starts_with_wrap(buffer_before_append_len);
         } else {
@@ -831,28 +901,8 @@ impl App {
         let mut sum = 0;
         let mut current_position = 0;
         let local_index = self.index - self.start_line_index;
-        let mut i = self.visible_top_pos_into_lines;
         let mut hard_lines_passed = 0;
-        loop {
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    break;
-                }
-                LineType::Start => {
-                    break;
-                }
-                LineType::Between => {
-                    i -= 1;
-                }
-                LineType::End => {
-                    i -= 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
-            }
-        }
-        for line in self.lines.iter().skip(i) {
+        for line in self.lines.iter().skip(self.nearest_anchor_start_line_pos) {
             if sum + line.length() > local_index {
                 break;
             }
@@ -875,7 +925,7 @@ impl App {
             }
             current_position += 1;
         }
-        let curr_pos_into_lines = i + current_position;
+        let curr_pos_into_lines = self.nearest_anchor_start_line_pos + current_position;
         self.row_number = curr_pos_into_lines - self.visible_top_pos_into_lines;
         let current_line = self.lines[curr_pos_into_lines];
         let offset_in_line = local_index - sum;
@@ -893,6 +943,28 @@ impl App {
             self.start_line_index = self
                 .piece_tree
                 .get_start_offset_of_a_line(self.start_line_number);
+            let mut i = self.visible_top_pos_into_lines;
+            loop {
+                match self.lines[i].line_type {
+                    LineType::Independent => {
+                        break;
+                    }
+                    LineType::Start => {
+                        break;
+                    }
+                    LineType::Between => {
+                        i -= 1;
+                    }
+                    LineType::End => {
+                        i -= 1;
+                    }
+                    LineType::Empty => {
+                        break;
+                    }
+                }
+            }
+            self.nearest_anchor_start_line_pos = i;
+
             self.row_number = 0;
         }
         self.col_hint = self.line_column;
@@ -900,27 +972,8 @@ impl App {
     fn compute_position_from_index_due_to_deletion(&mut self) {
         let mut sum = 0;
         let mut current_position = 0;
-        let mut i = self.visible_top_pos_into_lines;
         let mut hard_lines_passed = 0;
-        loop {
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    break;
-                }
-                LineType::Start => {
-                    break;
-                }
-                LineType::Between => {
-                    i -= 1;
-                }
-                LineType::End => {
-                    i -= 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
-            }
-        }
+        let mut i = self.nearest_anchor_start_line_pos;
         if self.index < self.start_line_index {
             let mut back_offset = self.start_line_index;
             i -= 1;
@@ -964,7 +1017,7 @@ impl App {
                 }
             }
             self.start_line_number -= hard_lines_passed;
-            self.visible_top_pos_into_lines = i;
+            self.nearest_anchor_start_line_pos = i;
             self.start_line_index = self
                 .piece_tree
                 .get_start_offset_of_a_line(self.start_line_number);
@@ -1004,11 +1057,42 @@ impl App {
                 [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
                 .width();
         }
-        let candidate_row_number = curr_pos_into_lines as i32 - self.visible_top_pos_into_lines as i32;
+        let candidate_row_number =
+            curr_pos_into_lines as i32 - self.visible_top_pos_into_lines as i32;
         if candidate_row_number < 0 {
             self.visible_top_pos_into_lines -= candidate_row_number.abs() as usize;
         }
         self.row_number = curr_pos_into_lines - self.visible_top_pos_into_lines;
+        if self.row_number >= self.window_height {
+            self.visible_top_pos_into_lines = self.row_number + self.visible_top_pos_into_lines;
+            self.start_line_number += hard_lines_passed;
+            self.start_line_index = self
+                .piece_tree
+                .get_start_offset_of_a_line(self.start_line_number);
+            let mut i = self.visible_top_pos_into_lines;
+            loop {
+                match self.lines[i].line_type {
+                    LineType::Independent => {
+                        break;
+                    }
+                    LineType::Start => {
+                        break;
+                    }
+                    LineType::Between => {
+                        i -= 1;
+                    }
+                    LineType::End => {
+                        i -= 1;
+                    }
+                    LineType::Empty => {
+                        break;
+                    }
+                }
+            }
+            self.nearest_anchor_start_line_pos = i;
+
+            self.row_number = 0;
+        }
         self.col_hint = self.line_column;
     }
     fn compute_new_horizontal_start_line(&mut self) {
