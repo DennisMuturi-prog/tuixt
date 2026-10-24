@@ -31,7 +31,8 @@ pub struct App {
     buffer: String,
     piece_tree: PieceTree,
     lines: Vec<TextEditorLine>,
-    start_pos_into_lines: usize,
+    visible_top_pos_into_lines: usize,
+    start_line_no_pos_into_lines:usize,
     no_of_hard_lines_queried: usize,
     wrap: bool,
     window_height: usize,
@@ -274,13 +275,14 @@ impl App {
                             }
                             if self.row_number == 0
                                 && self.line_column == 0
-                                && self.start_pos_into_lines == 0
+                                && self.visible_top_pos_into_lines == 0
                                 && (self.start_line_number as i32 - 1) >= 0
                             {
                                 self.start_line_number -= 1;
                                 self.buffer_start_index = self
                                     .piece_tree
                                     .get_start_offset_of_a_line(self.start_line_number);
+                                self.start_line_no_pos_into_lines=0;
                                 self.start_line_index = self.buffer_start_index;
                                 self.refresh_content_for_current_visible_window();
                                 if matches!(self.lines[0].line_type, LineType::Independent) {
@@ -288,11 +290,11 @@ impl App {
                                 } else {
                                     for (i, line) in self.lines.iter().enumerate() {
                                         if matches!(line.line_type, LineType::End) {
-                                            self.start_pos_into_lines = i;
+                                            self.visible_top_pos_into_lines = i;
                                             break;
                                         }
                                     }
-                                    self.line_column = self.lines[self.start_pos_into_lines].width;
+                                    self.line_column = self.lines[self.visible_top_pos_into_lines].width;
                                 }
                                 self.index -= 1;
                                 let local_index = self.index - self.buffer_start_index;
@@ -301,21 +303,18 @@ impl App {
                                 }
                             } else if self.row_number == 0
                                 && self.line_column == 0
-                                && (self.start_pos_into_lines as i32 - 1) >= 0
+                                && (self.visible_top_pos_into_lines as i32 - 1) >= 0
                             {
-                                self.start_pos_into_lines -= 1;
-                                self.line_column = self.lines[self.start_pos_into_lines].width;
+                                self.visible_top_pos_into_lines -= 1;
+                                self.line_column = self.lines[self.visible_top_pos_into_lines].width;
                                 if matches!(
-                                    self.lines[self.start_pos_into_lines].line_type,
+                                    self.lines[self.visible_top_pos_into_lines].line_type,
                                     LineType::Independent
                                 ) || matches!(
-                                    self.lines[self.start_pos_into_lines].line_type,
+                                    self.lines[self.visible_top_pos_into_lines].line_type,
                                     LineType::End
-                                ) {
-                                    self.start_line_number -= 1;
-                                    self.start_line_index = self
-                                        .piece_tree
-                                        .get_start_offset_of_a_line(self.start_line_number);
+                                ) { 
+                                    self.start_line_no_pos_into_lines=self.visible_top_pos_into_lines;
                                     self.index -= 1;
                                     let local_index = self.index - self.buffer_start_index;
                                     if self.buffer.as_bytes()[local_index - 1] == b'\r' {
@@ -325,13 +324,13 @@ impl App {
                             } else if self.line_column == 0 {
                                 self.row_number -= 1;
                                 self.line_column =
-                                    self.lines[self.start_pos_into_lines + self.row_number].width;
+                                    self.lines[self.visible_top_pos_into_lines + self.row_number].width;
                                 if matches!(
-                                    self.lines[self.start_pos_into_lines + self.row_number]
+                                    self.lines[self.visible_top_pos_into_lines + self.row_number]
                                         .line_type,
                                     LineType::End
                                 ) || matches!(
-                                    self.lines[self.start_pos_into_lines + self.row_number]
+                                    self.lines[self.visible_top_pos_into_lines + self.row_number]
                                         .line_type,
                                     LineType::Independent
                                 ) {
@@ -360,19 +359,19 @@ impl App {
                                 return Ok(());
                             }
                             if self.line_column
-                                >= self.lines[self.start_pos_into_lines + self.row_number].width
+                                >= self.lines[self.visible_top_pos_into_lines + self.row_number].width
                                 && self.row_number + 1 >= self.window_height
                             {
-                                if self.start_pos_into_lines + self.window_height < self.lines.len()
+                                if self.visible_top_pos_into_lines + self.window_height < self.lines.len()
                                 {
                                     self.line_column = 0;
-                                    self.start_pos_into_lines += 1;
+                                    self.visible_top_pos_into_lines += 1;
                                     if matches!(
-                                        self.lines[self.start_pos_into_lines + self.row_number - 1]
+                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::End
                                     ) || matches!(
-                                        self.lines[self.start_pos_into_lines + self.row_number - 1]
+                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::Independent
                                     ) {
@@ -384,10 +383,10 @@ impl App {
                                         }
                                     }
                                     if matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::Independent
                                     ) || matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::Start
                                     ) {
                                         self.start_line_number += 1;
@@ -402,7 +401,7 @@ impl App {
                                     {
                                         self.request_more_lines();
                                         self.line_column = 0;
-                                        self.start_pos_into_lines += 1;
+                                        self.visible_top_pos_into_lines += 1;
                                         let local_index = self.index - self.buffer_start_index;
                                         if self.buffer.as_bytes()[local_index] == b'\r' {
                                             self.index += 2;
@@ -410,10 +409,10 @@ impl App {
                                             self.index += 1;
                                         }
                                         if matches!(
-                                            self.lines[self.start_pos_into_lines].line_type,
+                                            self.lines[self.visible_top_pos_into_lines].line_type,
                                             LineType::Independent
                                         ) || matches!(
-                                            self.lines[self.start_pos_into_lines].line_type,
+                                            self.lines[self.visible_top_pos_into_lines].line_type,
                                             LineType::Start
                                         ) {
                                             self.start_line_number += 1;
@@ -424,19 +423,19 @@ impl App {
                                     }
                                 }
                             } else if self.line_column
-                                >= self.lines[self.start_pos_into_lines + self.row_number].width
+                                >= self.lines[self.visible_top_pos_into_lines + self.row_number].width
                             {
-                                if self.start_pos_into_lines + self.row_number + 1
+                                if self.visible_top_pos_into_lines + self.row_number + 1
                                     < self.lines.len()
                                 {
                                     self.row_number += 1;
                                     self.line_column = 0;
                                     if matches!(
-                                        self.lines[self.start_pos_into_lines + self.row_number - 1]
+                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::End
                                     ) || matches!(
-                                        self.lines[self.start_pos_into_lines + self.row_number - 1]
+                                        self.lines[self.visible_top_pos_into_lines + self.row_number - 1]
                                             .line_type,
                                         LineType::Independent
                                     ) {
@@ -469,7 +468,7 @@ impl App {
 
                         KeyCode::Up => {
                             if self.row_number == 0 {
-                                if self.start_pos_into_lines == 0 {
+                                if self.visible_top_pos_into_lines == 0 {
                                     if (self.start_line_number as i32 - 1) >= 0 {
                                         self.start_line_number -= 1;
                                         self.buffer_start_index = self
@@ -481,12 +480,12 @@ impl App {
                                         self.compute_index_from_row_and_col();
                                     }
                                 } else {
-                                    self.start_pos_into_lines -= 1;
+                                    self.visible_top_pos_into_lines -= 1;
                                     if matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::Independent
                                     ) || matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::End
                                     ) {
                                         self.start_line_number -= 1;
@@ -505,14 +504,14 @@ impl App {
                         }
                         KeyCode::Down => {
                             if self.row_number + 1 >= self.window_height {
-                                if self.start_pos_into_lines + self.window_height < self.lines.len()
+                                if self.visible_top_pos_into_lines + self.window_height < self.lines.len()
                                 {
-                                    self.start_pos_into_lines += 1;
+                                    self.visible_top_pos_into_lines += 1;
                                     if matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::Independent
                                     ) || matches!(
-                                        self.lines[self.start_pos_into_lines].line_type,
+                                        self.lines[self.visible_top_pos_into_lines].line_type,
                                         LineType::Start
                                     ) {
                                         self.start_line_number += 1;
@@ -527,13 +526,13 @@ impl App {
                                     if self.start_line_number + self.no_of_hard_lines_queried
                                         < total_lines
                                     {
-                                        self.start_pos_into_lines += 1;
+                                        self.visible_top_pos_into_lines += 1;
                                         self.request_more_lines();
                                         if matches!(
-                                            self.lines[self.start_pos_into_lines].line_type,
+                                            self.lines[self.visible_top_pos_into_lines].line_type,
                                             LineType::Independent
                                         ) || matches!(
-                                            self.lines[self.start_pos_into_lines].line_type,
+                                            self.lines[self.visible_top_pos_into_lines].line_type,
                                             LineType::Start
                                         ) {
                                             self.start_line_number += 1;
@@ -582,7 +581,7 @@ impl App {
         for line in self
             .lines
             .iter()
-            .skip(self.start_pos_into_lines)
+            .skip(self.visible_top_pos_into_lines)
             .take(self.window_height)
         {
             match line.line_type {
@@ -616,7 +615,7 @@ impl App {
         for line in self
             .lines
             .iter()
-            .skip(self.start_pos_into_lines)
+            .skip(self.visible_top_pos_into_lines)
             .take(self.window_height)
         {
             match line.line_type {
@@ -717,7 +716,7 @@ impl App {
             self.window_height + new_hard_lines_created,
             &mut self.buffer,
         );
-        let mut i = self.start_pos_into_lines;
+        let mut i = self.visible_top_pos_into_lines;
         loop {
             match self.lines[i].line_type {
                 LineType::Independent => {
@@ -774,7 +773,7 @@ impl App {
     }
     fn compute_index_from_row_and_col(&mut self) {
         let mut sum = 0;
-        let mut i = self.start_pos_into_lines;
+        let mut i = self.visible_top_pos_into_lines;
         loop {
             match self.lines[i].line_type {
                 LineType::Independent => {
@@ -813,7 +812,7 @@ impl App {
                 }
             }
         }
-        let current_line = self.lines[self.start_pos_into_lines + self.row_number];
+        let current_line = self.lines[self.visible_top_pos_into_lines + self.row_number];
         let (before_cursor, before_cursor_width) = (&self.buffer
             [current_line.start_in_buffer..current_line.start_in_buffer + current_line.length])
             .unicode_truncate(self.line_column);
@@ -827,12 +826,12 @@ impl App {
         }
         self.line_column = before_cursor_width;
         self.index = sum + self.start_line_index;
-    } 
+    }
     fn compute_position_from_index_due_to_insertion(&mut self) {
         let mut sum = 0;
         let mut current_position = 0;
         let local_index = self.index - self.start_line_index;
-        let mut i = self.start_pos_into_lines;
+        let mut i = self.visible_top_pos_into_lines;
         let mut hard_lines_passed = 0;
         loop {
             match self.lines[i].line_type {
@@ -877,7 +876,7 @@ impl App {
             current_position += 1;
         }
         let curr_pos_into_lines = i + current_position;
-        self.row_number = curr_pos_into_lines - self.start_pos_into_lines;
+        self.row_number = curr_pos_into_lines - self.visible_top_pos_into_lines;
         let current_line = self.lines[curr_pos_into_lines];
         let offset_in_line = local_index - sum;
         if matches!(current_line.line_type, LineType::Empty) {
@@ -889,7 +888,7 @@ impl App {
         }
 
         if self.row_number >= self.window_height {
-            self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
+            self.visible_top_pos_into_lines = self.row_number + self.visible_top_pos_into_lines;
             self.start_line_number += hard_lines_passed;
             self.start_line_index = self
                 .piece_tree
@@ -901,7 +900,7 @@ impl App {
     fn compute_position_from_index_due_to_deletion(&mut self) {
         let mut sum = 0;
         let mut current_position = 0;
-        let mut i = self.start_pos_into_lines;
+        let mut i = self.visible_top_pos_into_lines;
         let mut hard_lines_passed = 0;
         loop {
             match self.lines[i].line_type {
@@ -965,12 +964,13 @@ impl App {
                 }
             }
             self.start_line_number -= hard_lines_passed;
-            self.start_pos_into_lines=i;
+            self.visible_top_pos_into_lines = i;
             self.start_line_index = self
                 .piece_tree
                 .get_start_offset_of_a_line(self.start_line_number);
         }
         let local_index = self.index - self.start_line_index;
+        hard_lines_passed = 0;
         for line in self.lines.iter().skip(i) {
             if sum + line.length() > local_index {
                 break;
@@ -1004,15 +1004,11 @@ impl App {
                 [current_line.start_in_buffer..current_line.start_in_buffer + offset_in_line])
                 .width();
         }
-        self.row_number=curr_pos_into_lines-self.start_pos_into_lines;
-        if self.row_number >= self.window_height {
-            self.start_pos_into_lines = self.row_number + self.start_pos_into_lines;
-            self.start_line_number += hard_lines_passed;
-            self.start_line_index = self
-                .piece_tree
-                .get_start_offset_of_a_line(self.start_line_number);
-            self.row_number = 0;
+        let candidate_row_number = curr_pos_into_lines as i32 - self.visible_top_pos_into_lines as i32;
+        if candidate_row_number < 0 {
+            self.visible_top_pos_into_lines -= candidate_row_number.abs() as usize;
         }
+        self.row_number = curr_pos_into_lines - self.visible_top_pos_into_lines;
         self.col_hint = self.line_column;
     }
     fn compute_new_horizontal_start_line(&mut self) {
@@ -1025,7 +1021,7 @@ impl App {
             self.start_of_line += gap;
         }
         self.column_number = self.line_column - self.start_of_line;
-        let line = self.lines[self.start_pos_into_lines + self.row_number];
+        let line = self.lines[self.visible_top_pos_into_lines + self.row_number];
         let end = line.start_in_buffer + line.length;
         if line.width > self.start_of_line {
             let suffix_width = line.width - self.start_of_line;
