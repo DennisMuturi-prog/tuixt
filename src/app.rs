@@ -843,46 +843,13 @@ impl App {
     }
     fn compute_index_from_row_and_col(&mut self) {
         let mut sum = 0;
-        let mut i = self.visible_top_pos_into_lines;
-        loop {
-            match self.lines[i].line_type {
-                LineType::Independent => {
-                    break;
-                }
-                LineType::Start => {
-                    break;
-                }
-                LineType::Between => {
-                    i -= 1;
-                }
-                LineType::End => {
-                    i -= 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
-            }
-        }
-        for line in self.lines.iter().skip(i).take(self.row_number) {
-            match line.line_type {
-                LineType::Independent => {
-                    sum += line.length();
-                }
-                LineType::Start => {
-                    sum += line.length();
-                }
-                LineType::Between => {
-                    sum += line.length();
-                }
-                LineType::End => {
-                    sum += line.length();
-                }
-                LineType::Empty => {
-                    sum += line.length();
-                }
-            }
-        }
-        let current_line = self.lines[self.visible_top_pos_into_lines + self.row_number];
+        let current_pos_into_lines=self.visible_top_pos_into_lines + self.row_number;
+        let mut i= self.nearest_anchor_start_line_pos;
+        while i<current_pos_into_lines{
+            sum+=self.lines[i].length; 
+            i+=1;
+        }  
+        let current_line = self.lines[current_pos_into_lines];
         let (before_cursor, before_cursor_width) = (&self.buffer
             [current_line.start_in_buffer..current_line.start_in_buffer + current_line.length])
             .unicode_truncate(self.line_column);
@@ -903,20 +870,20 @@ impl App {
         let local_index = self.index - self.start_line_index;
         let mut hard_lines_passed = 0;
         for line in self.lines.iter().skip(self.nearest_anchor_start_line_pos) {
-            if sum + line.length() > local_index {
+            if sum + line.length >= local_index {
                 break;
             }
             match line.line_type {
                 LineType::Independent => {
-                    sum += line.length();
+                    sum += line.length;
                     hard_lines_passed += 1;
                 }
                 LineType::Start => {
-                    sum += line.length();
+                    sum += line.length;
                 }
-                LineType::Between => sum += line.length(),
+                LineType::Between => sum += line.length,
                 LineType::End => {
-                    sum += line.length();
+                    sum += line.length;
                     hard_lines_passed += 1;
                 }
                 LineType::Empty => {
@@ -978,7 +945,7 @@ impl App {
             let mut back_offset = self.start_line_index;
             i -= 1;
             loop {
-                back_offset -= self.lines[i].length();
+                back_offset -= self.lines[i].length;
                 if back_offset <= self.index {
                     break;
                 }
@@ -1025,20 +992,20 @@ impl App {
         let local_index = self.index - self.start_line_index;
         hard_lines_passed = 0;
         for line in self.lines.iter().skip(i) {
-            if sum + line.length() > local_index {
+            if sum + line.length >= local_index {
                 break;
             }
             match line.line_type {
                 LineType::Independent => {
-                    sum += line.length();
+                    sum += line.length;
                     hard_lines_passed += 1;
                 }
                 LineType::Start => {
-                    sum += line.length();
+                    sum += line.length;
                 }
-                LineType::Between => sum += line.length(),
+                LineType::Between => sum += line.length,
                 LineType::End => {
-                    sum += line.length();
+                    sum += line.length;
                     hard_lines_passed += 1;
                 }
                 LineType::Empty => {
@@ -1139,11 +1106,14 @@ impl App {
             self.lines.push(txt_line);
             offset += line.len();
             if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\n' {
+                if let Some(last) = self.lines.last_mut() {
+                    last.length += 1;
+                }
                 offset += 1;
             } else if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\r' {
                 offset += 2;
                 if let Some(last) = self.lines.last_mut() {
-                    last.length += 1;
+                    last.length += 2;
                 }
             }
         }
@@ -1210,11 +1180,14 @@ impl App {
             }
 
             if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\n' {
+                if let Some(last) = self.lines.last_mut() {
+                    last.length += 1;
+                }
                 offset += 1;
             } else if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\r' {
                 offset += 2;
                 if let Some(last) = self.lines.last_mut() {
-                    last.length += 1;
+                    last.length += 2;
                 }
             }
         }
@@ -1255,11 +1228,14 @@ impl App {
             self.lines.push(txt_line);
             offset += line.len();
             if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\n' {
+                if let Some(last) = self.lines.last_mut() {
+                    last.length += 1;
+                }
                 offset += 1;
             } else if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\r' {
                 offset += 2;
                 if let Some(last) = self.lines.last_mut() {
-                    last.length += 1;
+                    last.length += 2;
                 }
             }
         }
@@ -1326,11 +1302,14 @@ impl App {
             }
 
             if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\n' {
+                if let Some(last) = self.lines.last_mut() {
+                    last.length += 1;
+                }
                 offset += 1;
             } else if offset < self.buffer.len() && self.buffer.as_bytes()[offset] == b'\r' {
                 offset += 2;
                 if let Some(last) = self.lines.last_mut() {
-                    last.length += 1;
+                    last.length += 2;
                 }
             }
         }
@@ -1393,17 +1372,6 @@ pub struct TextEditorLine {
     length: usize,
     line_type: LineType,
     width: usize,
-}
-impl TextEditorLine {
-    fn length(&self) -> usize {
-        match self.line_type {
-            LineType::Independent => self.length + 1,
-            LineType::Start => self.length,
-            LineType::Between => self.length,
-            LineType::End => self.length + 1,
-            LineType::Empty => 0,
-        }
-    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
