@@ -279,6 +279,7 @@ impl App {
                                 && (self.start_line_number as i32 - 1) >= 0
                             {
                                 self.start_line_number -= 1;
+                                self.no_of_hard_lines_queried+=1;
                                 self.buffer_start_index = self
                                     .piece_tree
                                     .get_start_offset_of_a_line(self.start_line_number);
@@ -317,6 +318,7 @@ impl App {
                                     LineType::End
                                 ) {
                                     self.start_line_number -= 1;
+                                    self.no_of_hard_lines_queried+=1;
                                     self.start_line_index = self
                                         .piece_tree
                                         .get_start_offset_of_a_line(self.start_line_number);
@@ -430,6 +432,7 @@ impl App {
                                         LineType::Start
                                     ) {
                                         self.start_line_number += 1;
+                                        self.no_of_hard_lines_queried=self.no_of_hard_lines_queried.saturating_sub(1);
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
@@ -458,6 +461,8 @@ impl App {
                                             LineType::Start
                                         ) {
                                             self.start_line_number += 1;
+                                            self.no_of_hard_lines_queried=self.no_of_hard_lines_queried.saturating_sub(1);
+                                            self.no_of_hard_lines_queried=self.no_of_hard_lines_queried.saturating_sub(1);
                                             self.start_line_index = self
                                                 .piece_tree
                                                 .get_start_offset_of_a_line(self.start_line_number);
@@ -518,6 +523,7 @@ impl App {
                                 if self.visible_top_pos_into_lines == 0 {
                                     if (self.start_line_number as i32 - 1) >= 0 {
                                         self.start_line_number -= 1;
+                                        self.no_of_hard_lines_queried +=1;
                                         self.buffer_start_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
@@ -545,6 +551,7 @@ impl App {
                                         LineType::End
                                     ) {
                                         self.start_line_number -= 1;
+                                        self.no_of_hard_lines_queried+=1;
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
@@ -601,6 +608,7 @@ impl App {
                                         LineType::Start
                                     ) {
                                         self.start_line_number += 1;
+                                        self.no_of_hard_lines_queried=self.no_of_hard_lines_queried.saturating_sub(1);
                                         self.start_line_index = self
                                             .piece_tree
                                             .get_start_offset_of_a_line(self.start_line_number);
@@ -623,7 +631,8 @@ impl App {
                                             self.lines[self.visible_top_pos_into_lines].line_type,
                                             LineType::Start
                                         ) {
-                                            self.start_line_number += 1;
+                                            self.start_line_number += 1; 
+                                            self.no_of_hard_lines_queried=self.no_of_hard_lines_queried.saturating_sub(1);
                                             self.start_line_index = self
                                                 .piece_tree
                                                 .get_start_offset_of_a_line(self.start_line_number);
@@ -741,11 +750,25 @@ impl App {
         let removed_lines_count = previous_lf_count - current_lf_count;
         self.index = offset;
         if self.index >= self.buffer_start_index {
-            self.compute_position_from_index_due_to_deletion();
-            self.refresh_to_append_content(0);
-            self.compute_new_horizontal_start_line();
+            if self.index >= self.start_line_index {
+                self.refresh_to_append_content(0);
+                self.compute_position_from_index_due_to_deletion();
+            } else {
+                self.compute_position_from_index_due_to_deletion();
+                self.refresh_to_append_content(0);
+            }
         } else {
         }
+        self.compute_new_horizontal_start_line();
+    }
+
+    fn clamp_cursor_into_lines(&mut self) {
+        if self.lines.is_empty() {
+            return;
+        }
+        let last = self.lines.len() - 1;
+        self.visible_top_pos_into_lines = self.visible_top_pos_into_lines.min(last);
+        self.row_number = self.row_number.min(last - self.visible_top_pos_into_lines);
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -843,12 +866,12 @@ impl App {
     }
     fn compute_index_from_row_and_col(&mut self) {
         let mut sum = 0;
-        let current_pos_into_lines=self.visible_top_pos_into_lines + self.row_number;
-        let mut i= self.nearest_anchor_start_line_pos;
-        while i<current_pos_into_lines{
-            sum+=self.lines[i].length; 
-            i+=1;
-        }  
+        let current_pos_into_lines = self.visible_top_pos_into_lines + self.row_number;
+        let mut i = self.nearest_anchor_start_line_pos;
+        while i < current_pos_into_lines {
+            sum += self.lines[i].length;
+            i += 1;
+        }
         let current_line = self.lines[current_pos_into_lines];
         let (before_cursor, before_cursor_width) = (&self.buffer
             [current_line.start_in_buffer..current_line.start_in_buffer + current_line.length])
@@ -869,26 +892,23 @@ impl App {
         let mut current_position = 0;
         let local_index = self.index - self.start_line_index;
         let mut hard_lines_passed = 0;
-        for line in self.lines.iter().skip(self.nearest_anchor_start_line_pos) {
-            if sum + line.length >= local_index {
+        let last_pos = self.lines.len() - 1;
+        for (pos, line) in self
+            .lines
+            .iter()
+            .enumerate()
+            .skip(self.nearest_anchor_start_line_pos)
+        {
+            let line_end = sum + line.length;
+            if local_index < line_end {
                 break;
             }
-            match line.line_type {
-                LineType::Independent => {
-                    sum += line.length;
-                    hard_lines_passed += 1;
-                }
-                LineType::Start => {
-                    sum += line.length;
-                }
-                LineType::Between => sum += line.length,
-                LineType::End => {
-                    sum += line.length;
-                    hard_lines_passed += 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
+            if local_index == line_end && pos == last_pos {
+                break;
+            }
+            sum = line_end;
+            if matches!(line.line_type, LineType::Independent | LineType::End) {
+                hard_lines_passed += 1;
             }
             current_position += 1;
         }
@@ -934,6 +954,7 @@ impl App {
 
             self.row_number = 0;
         }
+        self.clamp_cursor_into_lines();
         self.col_hint = self.line_column;
     }
     fn compute_position_from_index_due_to_deletion(&mut self) {
@@ -943,6 +964,19 @@ impl App {
         let mut i = self.nearest_anchor_start_line_pos;
         if self.index < self.start_line_index {
             let mut back_offset = self.start_line_index;
+            match self.lines[i].line_type {
+                LineType::Independent => {
+                    hard_lines_passed += 1;
+                }
+                LineType::Start => {
+                    hard_lines_passed += 1;
+                }
+                LineType::Between => {}
+                LineType::End => {}
+                LineType::Empty => {
+                    hard_lines_passed += 1;
+                }
+            }
             i -= 1;
             loop {
                 back_offset -= self.lines[i].length;
@@ -991,29 +1025,27 @@ impl App {
         }
         let local_index = self.index - self.start_line_index;
         hard_lines_passed = 0;
-        for line in self.lines.iter().skip(i) {
-            if sum + line.length >= local_index {
+        let last_pos = self.lines.len() - 1;
+        for (pos, line) in self
+            .lines
+            .iter()
+            .enumerate()
+            .skip(self.nearest_anchor_start_line_pos)
+        {
+            let line_end = sum + line.length;
+            if local_index < line_end {
                 break;
             }
-            match line.line_type {
-                LineType::Independent => {
-                    sum += line.length;
-                    hard_lines_passed += 1;
-                }
-                LineType::Start => {
-                    sum += line.length;
-                }
-                LineType::Between => sum += line.length,
-                LineType::End => {
-                    sum += line.length;
-                    hard_lines_passed += 1;
-                }
-                LineType::Empty => {
-                    break;
-                }
+            if local_index == line_end && pos == last_pos {
+                break;
+            }
+            sum = line_end;
+            if matches!(line.line_type, LineType::Independent | LineType::End) {
+                hard_lines_passed += 1;
             }
             current_position += 1;
         }
+
         let curr_pos_into_lines = i + current_position;
         let current_line = self.lines[curr_pos_into_lines];
         let offset_in_line = local_index - sum;
@@ -1060,6 +1092,7 @@ impl App {
 
             self.row_number = 0;
         }
+        self.clamp_cursor_into_lines();
         self.col_hint = self.line_column;
     }
     fn compute_new_horizontal_start_line(&mut self) {
