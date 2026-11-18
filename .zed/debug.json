@@ -9,15 +9,9 @@
     "build": {
       "label": "cargo test -p tuixt --all-targets",
       "command": "cargo",
-      "args": [
-        "test",
-        "--package",
-        "tuixt",
-        "--all-targets",
-        "--no-run"
-      ],
+      "args": ["test", "--package", "tuixt", "--all-targets", "--no-run"],
       "env": {
-        "RUSTC_TOOLCHAIN": "/home/dennisdev/.rustup/toolchains/stable-x86_64-unknown-linux-gnu"
+        "RUSTC_TOOLCHAIN": "/home/dennisdev/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
       },
       "cwd": "/home/dennisdev/text_manager/tuixt",
       "use_new_terminal": false,
@@ -30,11 +24,9 @@
       "show_summary": false,
       "show_command": false,
       "save": "none",
-      "hooks": []
+      "hooks": [],
     },
-    "sourceLanguages": [
-      "rust"
-    ]
+    "sourceLanguages": ["rust"],
   },
   {
     "adapter": "CodeLLDB",
@@ -42,15 +34,9 @@
     "build": {
       "label": "cargo test -p tuixt --all-targets",
       "command": "cargo",
-      "args": [
-        "test",
-        "--package",
-        "tuixt",
-        "--all-targets",
-        "--no-run"
-      ],
+      "args": ["test", "--package", "tuixt", "--all-targets", "--no-run"],
       "env": {
-        "RUSTC_TOOLCHAIN": "/home/dennisdev/.rustup/toolchains/stable-x86_64-unknown-linux-gnu"
+        "RUSTC_TOOLCHAIN": "/home/dennisdev/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
       },
       "cwd": "/home/dennisdev/text_manager/tuixt",
       "use_new_terminal": false,
@@ -63,10 +49,18 @@
       "show_summary": false,
       "show_command": false,
       "save": "none",
-      "hooks": []
+      "hooks": [],
     },
-    "sourceLanguages": [
-      "rust"
-    ]
-  }
+    "sourceLanguages": ["rust"],
+  },
+  {
+      "label": "Build & Debug native binary",
+      "adapter": "CodeLLDB",
+      "build": {
+        "command": "cargo",
+        "args": ["build"]
+      },
+      // sourceLanguages is required for CodeLLDB (not GDB) when using Rust
+      "sourceLanguages": ["rust"]
+    }
 ]

@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
             println!("error occurred could not find window dimensions");
             return Err(err);
         }
-    };
+    }; 
     execute!(std::io::stdout(), EnableBracketedPaste)?;
     let mut app = App::new("", 5, 5, true);
     ratatui::run(|terminal| app.run(terminal))?;
