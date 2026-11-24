@@ -946,7 +946,6 @@ impl App {
             let highlight_style = self.highlight_styles[capture.index as usize];
             let byte_range = capture.node.byte_range();
             let local_start_index = curr_idx - self.buffer_start_index;
-
             if byte_range.start == curr_idx {
                 let local_end_index = byte_range.end - self.buffer_start_index;
                 let span = Span::styled(
@@ -955,6 +954,9 @@ impl App {
                 );
                 curr_idx = byte_range.end;
                 spans.push(span);
+                if curr_idx == end_idx {
+                    break;
+                }
             } else {
                 let local_end_index = byte_range.start - self.buffer_start_index;
                 let span = Span::from(&self.buffer[local_start_index..local_end_index]);
