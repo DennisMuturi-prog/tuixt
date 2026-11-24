@@ -15,7 +15,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use textwrap::{Options, wrap};
-use tree_sitter::{InputEdit, Node as TSNode, Parser, Point, Query, QueryCursor, Tree};
+use tree_sitter::{
+    InputEdit, Node as TSNode, Parser, Point, Query, QueryCaptures, QueryCursor, QueryMatch,
+    StreamingIterator, Tree,
+};
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
@@ -44,9 +47,8 @@ pub struct App {
     parser: Parser,
     syntax_tree: Tree,
     highlights_query: Query,
-    query_cursor: QueryCursor,
     file_path: String,
-    highlight_styles:Vec<Style>
+    highlight_styles: Vec<Style>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -72,8 +74,7 @@ impl App {
         mut parser: Parser,
         file_path: String,
         highlights_query: Query,
-        query_cursor: QueryCursor,
-        highlight_styles:Vec<Style>
+        highlight_styles: Vec<Style>,
     ) -> Self {
         let piece_tree = PieceTree::new(initial_content);
         let mut buffer = String::with_capacity(window_height * window_width);
@@ -103,9 +104,8 @@ impl App {
             redo_states: Vec::with_capacity(100),
             top_visible_line: TopVisibleLine::default(),
             file_path,
-            query_cursor,
             highlights_query,
-            highlight_styles
+            highlight_styles,
         }
     }
 
@@ -872,18 +872,20 @@ impl App {
         gutter
     }
     fn get_display_content(&self) -> Vec<Line<'_>> {
-        let sum_b4_visbiblity: usize = self
-            .render_lines
-            .iter()
-            .skip(self.top_visible_line.hard_line_info.pos_into_render_lines)
-            .take(
-                self.top_visible_line.pos_into_render_lines
-                    - self.top_visible_line.hard_line_info.pos_into_render_lines,
-            )
-            .map(|line| line.length)
-            .sum();
-        let mut curr_idx =
-            self.top_visible_line.hard_line_info.start_idx_in_global_buf + sum_b4_visbiblity;
+        let (mut query_cursor, mut curr_idx) = self.get_query_cursor();
+        let mut binding = |node: TSNode<'_>| -> CursorTextIter {
+            let range_of_node = node.byte_range();
+            CursorTextIter {
+                piece_tree: &self.piece_tree,
+                current_pos: range_of_node.start,
+                end: range_of_node.end,
+            }
+        };
+        let mut captures = query_cursor.captures(
+            &self.highlights_query,
+            self.syntax_tree.root_node(),
+            &mut binding,
+        );
         let mut visible_lines = Vec::with_capacity(self.render_lines.len());
         for line in self
             .render_lines
@@ -897,9 +899,13 @@ impl App {
                 }
                 _ => {
                     if self.wrap {
-                        let content =
-                            &self.buffer[line.start_in_buffer..line.start_in_buffer + line.length];
-                        visible_lines.push(Line::from(content));
+                        let highlighted_line = self.get_highlighted_render_line(
+                            &mut captures,
+                            curr_idx,
+                            curr_idx + line.length,
+                        );
+                        visible_lines.push(highlighted_line);
+                        curr_idx += line.length;
                         continue;
                     }
                     let end = line.start_in_buffer + line.length;
@@ -911,20 +917,75 @@ impl App {
                     let (suffix, _) = (&self.buffer[line.start_in_buffer..end])
                         .unicode_truncate_start(suffix_width);
                     let (final_trim, _) = suffix.unicode_truncate(self.window_width);
-                    visible_lines.push(Line::from(final_trim));
+                    let difference = line.length - final_trim.len();
+                    let highlighted_line = self.get_highlighted_render_line(
+                        &mut captures,
+                        curr_idx + difference,
+                        curr_idx + line.length,
+                    );
+                    visible_lines.push(highlighted_line);
+                    curr_idx += line.length;
                 }
             }
         }
         visible_lines
     }
-    fn get_highlighted_render_line<'a>(
-        &self,
-        root_node: TSNode,
-        idx: usize,
-        content: &'a str,
-    ) -> Line<'a> {
+    fn get_highlighted_render_line<'a, 'query, 'tree: 'query, C>(
+        &'a self,
+        query_captures: &mut C,
+        start_curr_idx: usize,
+        end_idx: usize,
+    ) -> Line<'a>
+    where
+        C: StreamingIterator<Item = (QueryMatch<'query, 'tree>, usize)>,
+    {
+        let mut curr_idx = start_curr_idx;
         let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
-        Line::from(spans)
+        while let Some((mat, capture_index)) = query_captures.next() {
+            let capture = mat.captures()[*capture_index];
+            let highlight_style = self.highlight_styles[capture.index as usize];
+            let byte_range = capture.node.byte_range();
+            let local_start_index = curr_idx - self.buffer_start_index;
+
+            if byte_range.start == curr_idx {
+                let local_end_index = byte_range.end - self.buffer_start_index;
+                let span = Span::styled(
+                    &self.buffer[local_start_index..local_end_index],
+                    highlight_style,
+                );
+                curr_idx = byte_range.end;
+                spans.push(span);
+            } else {
+                let local_end_index = byte_range.start - self.buffer_start_index;
+                let span = Span::from(&self.buffer[local_start_index..local_end_index]);
+                curr_idx = byte_range.start;
+                spans.push(span);
+                if curr_idx == end_idx {
+                    break;
+                }
+                let local_start_index = curr_idx - self.buffer_start_index;
+
+                let local_end_index = byte_range.end - self.buffer_start_index;
+                let span = Span::styled(
+                    &self.buffer[local_start_index..local_end_index],
+                    highlight_style,
+                );
+                curr_idx = byte_range.end;
+                spans.push(span);
+            }
+            if curr_idx == end_idx {
+                break;
+            }
+        }
+        if curr_idx < end_idx {
+            let local_start_index = curr_idx - self.buffer_start_index;
+            let local_end_index = end_idx - self.buffer_start_index;
+            let span = Span::from(&self.buffer[local_start_index..local_end_index]);
+            spans.push(span);
+            Line::from(spans)
+        } else {
+            Line::from(spans)
+        }
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -1054,7 +1115,6 @@ impl App {
             old_end_position: Point::new(0, 0),
             new_end_position: Point::new(0, 0),
         });
-        self.set_query_cursor_range();
         self.syntax_tree = self
             .parser
             .parse_with_options(
@@ -1083,7 +1143,6 @@ impl App {
             old_end_position: Point::new(0, 0),
             new_end_position: Point::new(0, 0),
         });
-        self.set_query_cursor_range();
         self.syntax_tree = self
             .parser
             .parse_with_options(
@@ -1128,7 +1187,7 @@ impl App {
         }
     }
 
-    fn set_query_cursor_range(&mut self) {
+    fn get_query_cursor(&self) -> (QueryCursor, usize) {
         let sum_b4_visbiblity: usize = self
             .render_lines
             .iter()
@@ -1164,7 +1223,9 @@ impl App {
             }
             i += 1;
         }
-        self.query_cursor.set_byte_range(start..end);
+        let mut cursor = QueryCursor::new();
+        cursor.set_byte_range(start..end);
+        (cursor, start)
     }
 
     fn request_more_lines(&mut self) {
@@ -1744,6 +1805,27 @@ pub struct TextEditorLine {
     length: usize,
     line_type: LineType,
     width: usize,
+}
+
+struct CursorTextIter<'a> {
+    piece_tree: &'a PieceTree,
+    current_pos: usize,
+    end: usize,
+}
+impl<'a> Iterator for CursorTextIter<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_pos < self.end {
+            let piece_bytes = self.piece_tree.get_bytes_starting_at(self.current_pos);
+            let distance_to_end = self.end - self.current_pos;
+            let distance_taken = min(distance_to_end, piece_bytes.len());
+            self.current_pos += distance_taken;
+            Some(&piece_bytes[..distance_taken])
+        } else {
+            return None;
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

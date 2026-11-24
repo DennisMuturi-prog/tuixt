@@ -54,13 +54,17 @@
     "sourceLanguages": ["rust"],
   },
   {
-      "label": "Build & Debug native binary",
-      "adapter": "CodeLLDB",
-      "build": {
-        "command": "cargo",
-        "args": ["build"]
-      },
-      // sourceLanguages is required for CodeLLDB (not GDB) when using Rust
-      "sourceLanguages": ["rust"]
-    }
+    "label": "Build & Debug native binary",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/tuixt",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["example.rs"],
+    "build": {
+      "command": "cargo",
+      "args": ["build"],
+    },
+    // sourceLanguages is required for CodeLLDB (not GDB) when using Rust
+    "sourceLanguages": ["rust"],
+  },
 ]

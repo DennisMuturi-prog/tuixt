@@ -48,9 +48,8 @@ fn main() -> io::Result<()> {
         .set_language(&language)
         .expect("Error loading Rust grammar");
     let highlights_query = Query::new(&language, tree_sitter_rust::HIGHLIGHTS_QUERY).unwrap(); 
-    let query_cursor = QueryCursor::new();
     let highlights_styles= build_capture_styles(&highlights_query);
-    let mut app = App::new(&file_contents, (initial_window_width-6) as usize, (initial_window_height-6) as usize, true, parser,file_path,highlights_query,query_cursor,highlights_styles);
+    let mut app = App::new(&file_contents, (initial_window_width-6) as usize, (initial_window_height-6) as usize, true, parser,file_path,highlights_query,highlights_styles);
     ratatui::run(|terminal| app.run(terminal))?;
     execute!(std::io::stdout(), DisableBracketedPaste)?;
     execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape)
