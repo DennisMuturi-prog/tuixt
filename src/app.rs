@@ -10,17 +10,17 @@ use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Alignment, Constraint, Direction, Layout, Position},
     prelude::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text, ToLine},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use textwrap::{Options, wrap};
+use tree_sitter::{InputEdit, Node as TSNode, Parser, Point, Query, QueryCursor, Tree};
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
 use crate::piece_tree::PieceTree;
 
-#[derive(Debug, Default)]
 pub struct App {
     exit: bool,
     mode: Mode,
@@ -41,15 +41,21 @@ pub struct App {
     undo_states: Vec<UndoRedoState>,
     redo_states: Vec<UndoRedoState>,
     top_visible_line: TopVisibleLine,
+    parser: Parser,
+    syntax_tree: Tree,
+    highlights_query: Query,
+    query_cursor: QueryCursor,
+    file_path: String,
+    highlight_styles:Vec<Style>
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Default, Clone, Copy, PartialEq)]
 struct TopVisibleLine {
     pos_into_render_lines: usize,
     hard_line_info: HardLineInfo,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Default, Clone, Copy, PartialEq)]
 struct HardLineInfo {
     start_idx_in_global_buf: usize,
     hard_line_no: usize,
@@ -63,11 +69,17 @@ impl App {
         window_width: usize,
         window_height: usize,
         wrap: bool,
+        mut parser: Parser,
+        file_path: String,
+        highlights_query: Query,
+        query_cursor: QueryCursor,
+        highlight_styles:Vec<Style>
     ) -> Self {
         let piece_tree = PieceTree::new(initial_content);
         let mut buffer = String::with_capacity(window_height * window_width);
         piece_tree.get_lines_text(0, window_height, &mut buffer);
         let lines = Vec::with_capacity(window_height);
+        let syntax_tree = parser.parse(initial_content, None).unwrap();
         Self {
             piece_tree,
             buffer,
@@ -76,7 +88,24 @@ impl App {
             window_width,
             wrap,
             start_of_line: 0,
-            ..Self::default()
+            parser,
+            syntax_tree,
+            exit: false,
+            mode: Mode::Normal,
+            column_number: 0,
+            row_number: 0,
+            index: 0,
+            buffer_start_index: 0,
+            no_of_hard_lines_queried: 0,
+            line_column: 0,
+            col_hint: 0,
+            undo_states: Vec::with_capacity(100),
+            redo_states: Vec::with_capacity(100),
+            top_visible_line: TopVisibleLine::default(),
+            file_path,
+            query_cursor,
+            highlights_query,
+            highlight_styles
         }
     }
 
@@ -843,6 +872,18 @@ impl App {
         gutter
     }
     fn get_display_content(&self) -> Vec<Line<'_>> {
+        let sum_b4_visbiblity: usize = self
+            .render_lines
+            .iter()
+            .skip(self.top_visible_line.hard_line_info.pos_into_render_lines)
+            .take(
+                self.top_visible_line.pos_into_render_lines
+                    - self.top_visible_line.hard_line_info.pos_into_render_lines,
+            )
+            .map(|line| line.length)
+            .sum();
+        let mut curr_idx =
+            self.top_visible_line.hard_line_info.start_idx_in_global_buf + sum_b4_visbiblity;
         let mut visible_lines = Vec::with_capacity(self.render_lines.len());
         for line in self
             .render_lines
@@ -875,6 +916,15 @@ impl App {
             }
         }
         visible_lines
+    }
+    fn get_highlighted_render_line<'a>(
+        &self,
+        root_node: TSNode,
+        idx: usize,
+        content: &'a str,
+    ) -> Line<'a> {
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
+        Line::from(spans)
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -996,6 +1046,25 @@ impl App {
             self.compute_position_from_index_due_to_deletion();
         }
         self.compute_new_horizontal_start_line();
+        self.syntax_tree.edit(&InputEdit {
+            start_byte: offset,
+            old_end_byte: offset + length,
+            new_end_byte: offset,
+            start_position: Point::new(0, 0),
+            old_end_position: Point::new(0, 0),
+            new_end_position: Point::new(0, 0),
+        });
+        self.set_query_cursor_range();
+        self.syntax_tree = self
+            .parser
+            .parse_with_options(
+                &mut |byte_offset: usize, _position: Point| -> &[u8] {
+                    self.piece_tree.get_bytes_starting_at(byte_offset)
+                },
+                Some(&self.syntax_tree),
+                None,
+            )
+            .unwrap();
     }
     fn insert(&mut self, offset: usize, new_content: &str) {
         let previous_lf_count = self.piece_tree.get_line_feed_count();
@@ -1006,6 +1075,25 @@ impl App {
         self.refresh_to_append_content(new_hard_lines_added);
         self.compute_position_from_index_due_to_insertion();
         self.compute_new_horizontal_start_line();
+        self.syntax_tree.edit(&InputEdit {
+            start_byte: offset,
+            old_end_byte: offset,
+            new_end_byte: offset + new_content.len(),
+            start_position: Point::new(0, 0),
+            old_end_position: Point::new(0, 0),
+            new_end_position: Point::new(0, 0),
+        });
+        self.set_query_cursor_range();
+        self.syntax_tree = self
+            .parser
+            .parse_with_options(
+                &mut |byte_offset: usize, _position: Point| -> &[u8] {
+                    self.piece_tree.get_bytes_starting_at(byte_offset)
+                },
+                Some(&self.syntax_tree),
+                None,
+            )
+            .unwrap();
     }
     fn refresh_to_append_content(&mut self, new_hard_lines_created: usize) {
         self.buffer.truncate(
@@ -1038,6 +1126,45 @@ impl App {
         } else {
             self.compute_line_starts_with_no_wrap();
         }
+    }
+
+    fn set_query_cursor_range(&mut self) {
+        let sum_b4_visbiblity: usize = self
+            .render_lines
+            .iter()
+            .skip(self.top_visible_line.hard_line_info.pos_into_render_lines)
+            .take(
+                self.top_visible_line.pos_into_render_lines
+                    - self.top_visible_line.hard_line_info.pos_into_render_lines,
+            )
+            .map(|line| line.length)
+            .sum();
+        let start =
+            self.top_visible_line.hard_line_info.start_idx_in_global_buf + sum_b4_visbiblity;
+        let mut end = start;
+        let mut no_of_hard_lines_crossed = 0;
+        let mut i = self.top_visible_line.pos_into_render_lines;
+        while no_of_hard_lines_crossed < self.window_height || end == self.piece_tree.get_tree_len()
+        {
+            match &self.render_lines[i].line_type {
+                LineType::Independent => {
+                    no_of_hard_lines_crossed += 1;
+                    end += self.render_lines[i].length;
+                }
+                LineType::Start => {}
+                LineType::Between => {}
+                LineType::End => {
+                    no_of_hard_lines_crossed += 1;
+                    end += self.render_lines[i].length;
+                }
+                LineType::Empty => {
+                    no_of_hard_lines_crossed += 1;
+                    end += self.render_lines[i].length;
+                }
+            }
+            i += 1;
+        }
+        self.query_cursor.set_byte_range(start..end);
     }
 
     fn request_more_lines(&mut self) {
@@ -1606,7 +1733,6 @@ enum LineType {
     Empty,
 }
 
-#[derive(Debug)]
 struct UndoRedoState {
     top_visible_line: TopVisibleLine,
     buffer_start_index: usize,
@@ -1640,4 +1766,51 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1] // Return the middle chunk
+}
+
+pub const DEFAULT_STYLE: Style = Style::new().fg(Color::Rgb(0xCD, 0xD6, 0xF4));
+pub const EDITOR_BG: Color = Color::Rgb(0x1E, 0x1E, 0x2E);
+
+pub fn style_for_capture(name: &str) -> Style {
+    match name {
+        "comment" => Style::new()
+            .fg(Color::Rgb(0x6C, 0x70, 0x86))
+            .add_modifier(Modifier::ITALIC),
+        "keyword" => Style::new()
+            .fg(Color::Rgb(0xCB, 0xA6, 0xF7))
+            .add_modifier(Modifier::BOLD),
+        "function" | "function.method" => Style::new().fg(Color::Rgb(0x89, 0xB4, 0xFA)),
+        "function.builtin" => Style::new().fg(Color::Rgb(0x74, 0xC7, 0xEC)),
+        "function.macro" => Style::new().fg(Color::Rgb(0x94, 0xE2, 0xD5)),
+        "type" | "type.builtin" => Style::new().fg(Color::Rgb(0xF9, 0xE2, 0xAF)),
+        "constructor" | "variable.builtin" => Style::new().fg(Color::Rgb(0xF3, 0x8B, 0xA8)),
+        "constant" | "constant.builtin" => Style::new().fg(Color::Rgb(0xFA, 0xB3, 0x87)),
+        "string" => Style::new().fg(Color::Rgb(0xA6, 0xE3, 0xA1)),
+        "escape" | "attribute" | "punctuation.special" => {
+            Style::new().fg(Color::Rgb(0xF5, 0xC2, 0xE7))
+        }
+        "property" => Style::new().fg(Color::Rgb(0xB4, 0xBE, 0xFE)),
+        "variable.parameter" => Style::new()
+            .fg(Color::Rgb(0xEB, 0xA0, 0xAC))
+            .add_modifier(Modifier::ITALIC),
+        "label" => Style::new()
+            .fg(Color::Rgb(0xF2, 0xCD, 0xCD))
+            .add_modifier(Modifier::ITALIC),
+        "operator" => Style::new().fg(Color::Rgb(0x89, 0xDC, 0xEB)),
+        "punctuation.bracket" | "punctuation.delimiter" => {
+            Style::new().fg(Color::Rgb(0x93, 0x99, 0xB2))
+        }
+        _ => match name.split('.').next() {
+            Some(base) if base != name => style_for_capture(base),
+            _ => DEFAULT_STYLE,
+        },
+    }
+}
+
+pub fn build_capture_styles(query: &Query) -> Vec<Style> {
+    query
+        .capture_names()
+        .iter()
+        .map(|name| style_for_capture(name))
+        .collect()
 }

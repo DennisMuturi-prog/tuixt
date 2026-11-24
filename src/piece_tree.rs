@@ -98,6 +98,17 @@ impl PieceTree {
             self.get_sub_text_helper(root_node, content, start_index, length);
         }
     }
+    pub fn get_bytes_starting_at(&self, start_index: usize) -> &[u8] {
+        if let Some(root_node) = self.root.as_ref() {
+            if start_index >= root_node.subtree_len {
+                return &[];
+            }
+            let content_str = self.bytes_for_node_at_offset_helper(root_node, start_index);
+            return content_str.as_bytes();
+        } else {
+            return &[];
+        }
+    }
     pub fn get_line_text(&self, line_number: usize, content: &mut String) {
         if let Some(root_node) = self.root.as_ref() {
             let mut descent_to_line = self.node_at_start_of_line(root_node, line_number, content);
@@ -578,6 +589,56 @@ impl PieceTree {
             remainder: 0,
             path,
         }
+    }
+    fn bytes_for_node_at_offset_helper<'a>(&'a self, root: &Node, offset: usize) -> &'a str {
+        let mut offset = offset;
+        let mut current_node = root;
+        let black_leaf = &self.black_leaf;
+        let mut offset_in_node = 0;
+        loop {
+            if offset < current_node.left_subtree_len {
+                let candidate_next_node = current_node.left.as_ref().unwrap();
+                current_node = current_node.left.as_ref().unwrap();
+                if Rc::ptr_eq(candidate_next_node, black_leaf) {
+                    offset_in_node = offset;
+                    break;
+                } else {
+                    current_node = candidate_next_node;
+                }
+            } else if current_node.left_subtree_len + current_node.length >= offset {
+                offset_in_node = offset - current_node.left_subtree_len;
+
+                break;
+            } else {
+                let candidate_next_node = current_node.right.as_ref().unwrap();
+                if Rc::ptr_eq(candidate_next_node, black_leaf) {
+                    offset_in_node = offset;
+                    break;
+                } else {
+                    offset -= current_node.left_subtree_len + current_node.length;
+                    current_node = candidate_next_node;
+                }
+            }
+        }
+        let content_str = match current_node.buffer_type {
+            BufferType::Original => {
+                let start_offset = self.original_line_starts[current_node.start.line]
+                    + current_node.start.column
+                    + offset_in_node;
+                let end_offset =
+                    self.original_line_starts[current_node.end.line] + current_node.end.column;
+                &self.original[start_offset..end_offset]
+            }
+            BufferType::Add => {
+                let start_offset = self.add_line_starts[current_node.start.line]
+                    + current_node.start.column
+                    + offset_in_node;
+                let end_offset =
+                    self.add_line_starts[current_node.end.line] + current_node.end.column;
+                &self.add[start_offset..end_offset]
+            }
+        };
+        content_str
     }
     fn insert_at(&self, current_node: &Node, offset: usize, node_to_insert: Rc<Node>) -> Rc<Node> {
         if std::ptr::eq(current_node, self.black_leaf.deref()) {

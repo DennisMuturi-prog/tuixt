@@ -12,6 +12,9 @@ textwrap = { version = "0.16.4", features = ["unicode-linebreak"] }
 unicode-truncate = "3.0.0"
 unicode-width = "0.2.2"
 
+tree-sitter = "0.27.2"
+tree-sitter-rust = "0.24.2"
+
 
 [profile.release]
 debug = true
