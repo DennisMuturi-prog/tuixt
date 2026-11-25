@@ -896,6 +896,11 @@ impl App {
             let byte_range = capture.node.byte_range();
             styles_and_ranges.push((highlight_style, byte_range));
         }
+        styles_and_ranges.sort_by(|a, b| {
+            a.1.start
+                .cmp(&b.1.start)
+                .then_with(|| b.1.end.cmp(&a.1.end))
+        });
         let mut visible_lines = Vec::with_capacity(self.render_lines.len());
         let mut i = 0;
         let mut active_styles: Vec<(Style, usize)> = Vec::new();
@@ -958,91 +963,38 @@ impl App {
     ) -> Line<'a> {
         let mut curr_idx = start_curr_idx;
         let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
-        while *i < styles_and_ranges.len() {
-            while let Some(_) = active_styles.pop_if(|active_style| active_style.1 <= curr_idx) {}
-            active_styles.push((styles_and_ranges[*i].0, styles_and_ranges[*i].1.end));
-            if styles_and_ranges[*i].1.end <= curr_idx {
+
+        while curr_idx < end_idx {
+            active_styles.retain(|&(_, end)| end > curr_idx);
+
+            while *i < styles_and_ranges.len() && styles_and_ranges[*i].1.start <= curr_idx {
+                let (style, ref range) = styles_and_ranges[*i];
+                if range.end > curr_idx {
+                    active_styles.push((style, range.end));
+                }
                 *i += 1;
-                continue;
             }
-            if *i + 1 < styles_and_ranges.len() {
-                let byte_range_i_end = styles_and_ranges[*i].1.end;
-                let byte_range_i_plus_1_start = styles_and_ranges[*i + 1].1.start;
-                if byte_range_i_plus_1_start < byte_range_i_end {
-                    *i += 1;
-                    continue;
-                }
-            }
-            let local_start_index = curr_idx - self.buffer_start_index;
-            let highlight_style_and_byte_range = styles_and_ranges[*i].clone();
-            let byte_range = highlight_style_and_byte_range.1;
-            let highlight_style = highlight_style_and_byte_range.0;
-            if byte_range.start <= curr_idx {
-                let glob_end_idx = min(byte_range.end, end_idx);
-                let local_end_index = glob_end_idx - self.buffer_start_index;
-                let span = Span::styled(
-                    &self.buffer[local_start_index..local_end_index],
-                    highlight_style,
-                );
-                curr_idx = glob_end_idx;
-                spans.push(span);
-                if byte_range.end == curr_idx {
-                    *i += 1;
-                }
-                if curr_idx == end_idx {
-                    break;
-                }
-            } else {
-                let glob_end_idx = min(byte_range.start, end_idx);
-                let local_end_index = glob_end_idx - self.buffer_start_index;
-                if let Some(top) = active_styles.last() {
-                    let span =
-                        Span::styled(&self.buffer[local_start_index..local_end_index], top.0);
-                    spans.push(span);
-                } else {
-                    let span = Span::from(&self.buffer[local_start_index..local_end_index]);
-                    spans.push(span);
-                }
 
-                curr_idx = glob_end_idx;
-                if curr_idx == end_idx {
-                    break;
-                }
-                let local_start_index = curr_idx - self.buffer_start_index;
-                let glob_end_idx = min(byte_range.end, end_idx);
-                let local_end_index = glob_end_idx - self.buffer_start_index;
-                let span = Span::styled(
-                    &self.buffer[local_start_index..local_end_index],
-                    highlight_style,
-                );
-                curr_idx = glob_end_idx;
-                spans.push(span);
-                if byte_range.end == curr_idx {
-                    *i += 1;
-                }
-                if curr_idx == end_idx {
-                    break;
-                }
+            let mut next_stop = end_idx;
+            if let Some(&(_, min_end)) = active_styles.iter().min_by_key(|&&(_, end)| end) {
+                next_stop = min(next_stop, min_end);
             }
+            if *i < styles_and_ranges.len() {
+                next_stop = min(next_stop, styles_and_ranges[*i].1.start);
+            }
+
+            let local_start = curr_idx - self.buffer_start_index;
+            let local_end = next_stop - self.buffer_start_index;
+            let slice = &self.buffer[local_start..local_end];
+            let span = match active_styles.last() {
+                Some(&(style, _)) => Span::styled(slice, style),
+                None => Span::from(slice),
+            };
+            spans.push(span);
+            curr_idx = next_stop;
         }
 
-        while let Some(_) = active_styles.pop_if(|active_style| active_style.1 <= curr_idx) {}
-        if curr_idx < end_idx {
-            let local_start_index = curr_idx - self.buffer_start_index;
-            let local_end_index = end_idx - self.buffer_start_index;
-
-            if let Some(top) = active_styles.last() {
-                let span = Span::styled(&self.buffer[local_start_index..local_end_index], top.0);
-                spans.push(span);
-            } else {
-                let span = Span::from(&self.buffer[local_start_index..local_end_index]);
-                spans.push(span);
-            }
-
-            Line::from(spans)
-        } else {
-            Line::from(spans)
-        }
+        Line::from(spans)
     }
     fn snapshot(&self) -> UndoRedoState {
         UndoRedoState {
@@ -1915,6 +1867,9 @@ pub fn style_for_capture(name: &str) -> Style {
     match name {
         "comment" => Style::new()
             .fg(Color::Rgb(0x6C, 0x70, 0x86))
+            .add_modifier(Modifier::ITALIC),
+        "comment.documentation" => Style::new()
+            .fg(Color::Rgb(0xA6, 0xAD, 0xC8))
             .add_modifier(Modifier::ITALIC),
         "keyword" => Style::new()
             .fg(Color::Rgb(0xCB, 0xA6, 0xF7))
