@@ -564,8 +564,6 @@ impl App {
                                             self.top_visible_line.hard_line_info.hard_line_no += 1;
                                             self.no_of_hard_lines_queried =
                                                 self.no_of_hard_lines_queried.saturating_sub(1);
-                                            self.no_of_hard_lines_queried =
-                                                self.no_of_hard_lines_queried.saturating_sub(1);
                                             self.top_visible_line
                                                 .hard_line_info
                                                 .start_idx_in_global_buf =
@@ -1175,6 +1173,7 @@ impl App {
         );
         self.render_lines
             .truncate(self.top_visible_line.hard_line_info.pos_into_render_lines);
+        self.no_of_hard_lines_queried = 0;
         if self.wrap {
             self.compute_extra_line_starts_with_wrap(buffer_before_append_len);
         } else {
@@ -1658,7 +1657,7 @@ impl App {
                 }
             }
         }
-        self.no_of_hard_lines_queried = no_of_hard_lines;
+        self.no_of_hard_lines_queried += no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
             && self.top_visible_line.hard_line_info.start_idx_in_global_buf + buf.len()
                 == self.piece_tree.get_tree_len()
@@ -1735,7 +1734,7 @@ impl App {
                 }
             }
         }
-        self.no_of_hard_lines_queried = no_of_hard_lines;
+        self.no_of_hard_lines_queried += no_of_hard_lines;
         if self.buffer.as_bytes()[self.buffer.len() - 1] == b'\n'
             && self.top_visible_line.hard_line_info.start_idx_in_global_buf + buf.len()
                 == self.piece_tree.get_tree_len()
