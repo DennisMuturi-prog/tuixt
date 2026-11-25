@@ -923,18 +923,21 @@ impl App {
                     let end = line.start_in_buffer + line.length;
                     if line.width <= self.start_of_line {
                         visible_lines.push(Line::from(""));
+                        curr_idx += line.length;
                         continue;
                     }
                     let suffix_width = line.width - self.start_of_line;
                     let (suffix, _) = (&self.buffer[line.start_in_buffer..end])
                         .unicode_truncate_start(suffix_width);
-                    let (final_trim, _) = suffix.unicode_truncate(self.window_width);
-                    let difference = line.length - final_trim.len();
+                    let prefix_difference = line.length - suffix.len();
+
+                    let (final_trim,_ ) = suffix.unicode_truncate(self.window_width);
+                    let suffix_difference = suffix.len() - final_trim.len();
                     let highlighted_line = self.get_highlighted_render_line(
                         &mut i,
                         &styles_and_ranges,
-                        curr_idx + difference,
-                        curr_idx + line.length,
+                        curr_idx + prefix_difference,
+                        curr_idx + line.length - suffix_difference,
                     );
                     visible_lines.push(highlighted_line);
                     curr_idx += line.length;
@@ -953,11 +956,16 @@ impl App {
         let mut curr_idx = start_curr_idx;
         let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
         while *i < styles_and_ranges.len() {
+            if styles_and_ranges[*i].1.end <= curr_idx {
+                *i += 1;
+                continue;
+            }
             if *i + 1 < styles_and_ranges.len() {
                 let byte_range_i_end = styles_and_ranges[*i].1.end;
                 let byte_range_i_plus_1_start = styles_and_ranges[*i + 1].1.start;
                 if byte_range_i_plus_1_start < byte_range_i_end {
                     *i += 1;
+                    continue;
                 }
             }
             let local_start_index = curr_idx - self.buffer_start_index;
@@ -966,7 +974,7 @@ impl App {
             let highlight_style = highlight_style_and_byte_range.0;
             if byte_range.start <= curr_idx {
                 let glob_end_idx = min(byte_range.end, end_idx);
-                let local_end_index = byte_range.end - self.buffer_start_index;
+                let local_end_index = glob_end_idx - self.buffer_start_index;
                 let span = Span::styled(
                     &self.buffer[local_start_index..local_end_index],
                     highlight_style,
@@ -979,7 +987,7 @@ impl App {
                 if curr_idx == end_idx {
                     break;
                 }
-            } else  {
+            } else {
                 let glob_end_idx = min(byte_range.start, end_idx);
                 let local_end_index = glob_end_idx - self.buffer_start_index;
                 let span = Span::from(&self.buffer[local_start_index..local_end_index]);
@@ -1236,19 +1244,17 @@ impl App {
             match &self.render_lines[i].line_type {
                 LineType::Independent => {
                     no_of_hard_lines_crossed += 1;
-                    end += self.render_lines[i].length;
                 }
-                LineType::Start => {}
-                LineType::Between => {}
                 LineType::End => {
                     no_of_hard_lines_crossed += 1;
-                    end += self.render_lines[i].length;
                 }
                 LineType::Empty => {
                     no_of_hard_lines_crossed += 1;
-                    end += self.render_lines[i].length;
                 }
+                _ => {}
             }
+
+            end += self.render_lines[i].length;
             i += 1;
         }
         let mut cursor = QueryCursor::new();
@@ -1846,6 +1852,9 @@ impl<'a> Iterator for CursorTextIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_pos < self.end {
             let piece_bytes = self.piece_tree.get_bytes_starting_at(self.current_pos);
+            if piece_bytes.is_empty() {
+                return None;
+            }
             let distance_to_end = self.end - self.current_pos;
             let distance_taken = min(distance_to_end, piece_bytes.len());
             self.current_pos += distance_taken;

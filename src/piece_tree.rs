@@ -598,14 +598,13 @@ impl PieceTree {
         loop {
             if offset < current_node.left_subtree_len {
                 let candidate_next_node = current_node.left.as_ref().unwrap();
-                current_node = current_node.left.as_ref().unwrap();
                 if Rc::ptr_eq(candidate_next_node, black_leaf) {
                     offset_in_node = offset;
                     break;
                 } else {
                     current_node = candidate_next_node;
                 }
-            } else if current_node.left_subtree_len + current_node.length >= offset {
+            } else if current_node.left_subtree_len + current_node.length > offset {
                 offset_in_node = offset - current_node.left_subtree_len;
 
                 break;
