@@ -1,6 +1,8 @@
 use std::{
     cmp::{max, min},
-    io, usize,
+    io,
+    ops::Range,
+    usize,
 };
 
 use crossterm::{cursor::SetCursorStyle, execute};
@@ -16,8 +18,7 @@ use ratatui::{
 };
 use textwrap::{Options, wrap};
 use tree_sitter::{
-    InputEdit, Node as TSNode, Parser, Point, Query, QueryCaptures, QueryCursor, QueryMatch,
-    StreamingIterator, Tree,
+    InputEdit, Node as TSNode, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
 };
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
@@ -886,7 +887,17 @@ impl App {
             self.syntax_tree.root_node(),
             &mut binding,
         );
+        let mut styles_and_ranges =
+            Vec::with_capacity((self.window_height * self.window_width) / 5);
+
+        while let Some((mat, capture_index)) = captures.next() {
+            let capture = mat.captures()[*capture_index];
+            let highlight_style = self.highlight_styles[capture.index as usize];
+            let byte_range = capture.node.byte_range();
+            styles_and_ranges.push((highlight_style, byte_range));
+        }
         let mut visible_lines = Vec::with_capacity(self.render_lines.len());
+        let mut i = 0;
         for line in self
             .render_lines
             .iter()
@@ -900,7 +911,8 @@ impl App {
                 _ => {
                     if self.wrap {
                         let highlighted_line = self.get_highlighted_render_line(
-                            &mut captures,
+                            &mut i,
+                            &styles_and_ranges,
                             curr_idx,
                             curr_idx + line.length,
                         );
@@ -919,7 +931,8 @@ impl App {
                     let (final_trim, _) = suffix.unicode_truncate(self.window_width);
                     let difference = line.length - final_trim.len();
                     let highlighted_line = self.get_highlighted_render_line(
-                        &mut captures,
+                        &mut i,
+                        &styles_and_ranges,
                         curr_idx + difference,
                         curr_idx + line.length,
                     );
@@ -930,53 +943,66 @@ impl App {
         }
         visible_lines
     }
-    fn get_highlighted_render_line<'a, 'query, 'tree: 'query, C>(
+    fn get_highlighted_render_line<'a>(
         &'a self,
-        query_captures: &mut C,
+        i: &mut usize,
+        styles_and_ranges: &[(Style, Range<usize>)],
         start_curr_idx: usize,
         end_idx: usize,
-    ) -> Line<'a>
-    where
-        C: StreamingIterator<Item = (QueryMatch<'query, 'tree>, usize)>,
-    {
+    ) -> Line<'a> {
         let mut curr_idx = start_curr_idx;
         let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
-        while let Some((mat, capture_index)) = query_captures.next() {
-            let capture = mat.captures()[*capture_index];
-            let highlight_style = self.highlight_styles[capture.index as usize];
-            let byte_range = capture.node.byte_range();
+        while *i < styles_and_ranges.len() {
+            if *i + 1 < styles_and_ranges.len() {
+                let byte_range_i_end = styles_and_ranges[*i].1.end;
+                let byte_range_i_plus_1_start = styles_and_ranges[*i + 1].1.start;
+                if byte_range_i_plus_1_start < byte_range_i_end {
+                    *i += 1;
+                }
+            }
             let local_start_index = curr_idx - self.buffer_start_index;
-            if byte_range.start == curr_idx {
+            let highlight_style_and_byte_range = styles_and_ranges[*i].clone();
+            let byte_range = highlight_style_and_byte_range.1;
+            let highlight_style = highlight_style_and_byte_range.0;
+            if byte_range.start <= curr_idx {
+                let glob_end_idx = min(byte_range.end, end_idx);
                 let local_end_index = byte_range.end - self.buffer_start_index;
                 let span = Span::styled(
                     &self.buffer[local_start_index..local_end_index],
                     highlight_style,
                 );
-                curr_idx = byte_range.end;
+                curr_idx = glob_end_idx;
                 spans.push(span);
+                if byte_range.end == curr_idx {
+                    *i += 1;
+                }
                 if curr_idx == end_idx {
                     break;
                 }
-            } else {
-                let local_end_index = byte_range.start - self.buffer_start_index;
+            } else  {
+                let glob_end_idx = min(byte_range.start, end_idx);
+                let local_end_index = glob_end_idx - self.buffer_start_index;
                 let span = Span::from(&self.buffer[local_start_index..local_end_index]);
-                curr_idx = byte_range.start;
+                curr_idx = glob_end_idx;
                 spans.push(span);
                 if curr_idx == end_idx {
                     break;
                 }
                 let local_start_index = curr_idx - self.buffer_start_index;
-
-                let local_end_index = byte_range.end - self.buffer_start_index;
+                let glob_end_idx = min(byte_range.end, end_idx);
+                let local_end_index = glob_end_idx - self.buffer_start_index;
                 let span = Span::styled(
                     &self.buffer[local_start_index..local_end_index],
                     highlight_style,
                 );
-                curr_idx = byte_range.end;
+                curr_idx = glob_end_idx;
                 spans.push(span);
-            }
-            if curr_idx == end_idx {
-                break;
+                if byte_range.end == curr_idx {
+                    *i += 1;
+                }
+                if curr_idx == end_idx {
+                    break;
+                }
             }
         }
         if curr_idx < end_idx {
@@ -1205,7 +1231,7 @@ impl App {
         let mut end = start;
         let mut no_of_hard_lines_crossed = 0;
         let mut i = self.top_visible_line.pos_into_render_lines;
-        while no_of_hard_lines_crossed < self.window_height || end == self.piece_tree.get_tree_len()
+        while no_of_hard_lines_crossed < self.window_height && end < self.piece_tree.get_tree_len()
         {
             match &self.render_lines[i].line_type {
                 LineType::Independent => {
