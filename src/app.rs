@@ -898,6 +898,7 @@ impl App {
         }
         let mut visible_lines = Vec::with_capacity(self.render_lines.len());
         let mut i = 0;
+        let mut active_styles: Vec<(Style, usize)> = Vec::new();
         for line in self
             .render_lines
             .iter()
@@ -912,6 +913,7 @@ impl App {
                     if self.wrap {
                         let highlighted_line = self.get_highlighted_render_line(
                             &mut i,
+                            &mut active_styles,
                             &styles_and_ranges,
                             curr_idx,
                             curr_idx + line.length,
@@ -931,13 +933,13 @@ impl App {
                         .unicode_truncate_start(suffix_width);
                     let prefix_difference = line.length - suffix.len();
 
-                    let (final_trim,_ ) = suffix.unicode_truncate(self.window_width);
-                    let suffix_difference = suffix.len() - final_trim.len();
+                    let (final_trim, _) = suffix.unicode_truncate(self.window_width);
                     let highlighted_line = self.get_highlighted_render_line(
                         &mut i,
+                        &mut active_styles,
                         &styles_and_ranges,
                         curr_idx + prefix_difference,
-                        curr_idx + line.length - suffix_difference,
+                        curr_idx + prefix_difference + final_trim.len(),
                     );
                     visible_lines.push(highlighted_line);
                     curr_idx += line.length;
@@ -949,6 +951,7 @@ impl App {
     fn get_highlighted_render_line<'a>(
         &'a self,
         i: &mut usize,
+        active_styles: &mut Vec<(Style, usize)>,
         styles_and_ranges: &[(Style, Range<usize>)],
         start_curr_idx: usize,
         end_idx: usize,
@@ -956,6 +959,8 @@ impl App {
         let mut curr_idx = start_curr_idx;
         let mut spans: Vec<Span<'_>> = Vec::with_capacity(10);
         while *i < styles_and_ranges.len() {
+            while let Some(_) = active_styles.pop_if(|active_style| active_style.1 <= curr_idx) {}
+            active_styles.push((styles_and_ranges[*i].0, styles_and_ranges[*i].1.end));
             if styles_and_ranges[*i].1.end <= curr_idx {
                 *i += 1;
                 continue;
@@ -990,9 +995,16 @@ impl App {
             } else {
                 let glob_end_idx = min(byte_range.start, end_idx);
                 let local_end_index = glob_end_idx - self.buffer_start_index;
-                let span = Span::from(&self.buffer[local_start_index..local_end_index]);
+                if let Some(top) = active_styles.last() {
+                    let span =
+                        Span::styled(&self.buffer[local_start_index..local_end_index], top.0);
+                    spans.push(span);
+                } else {
+                    let span = Span::from(&self.buffer[local_start_index..local_end_index]);
+                    spans.push(span);
+                }
+
                 curr_idx = glob_end_idx;
-                spans.push(span);
                 if curr_idx == end_idx {
                     break;
                 }
@@ -1013,11 +1025,20 @@ impl App {
                 }
             }
         }
+
+        while let Some(_) = active_styles.pop_if(|active_style| active_style.1 <= curr_idx) {}
         if curr_idx < end_idx {
             let local_start_index = curr_idx - self.buffer_start_index;
             let local_end_index = end_idx - self.buffer_start_index;
-            let span = Span::from(&self.buffer[local_start_index..local_end_index]);
-            spans.push(span);
+
+            if let Some(top) = active_styles.last() {
+                let span = Span::styled(&self.buffer[local_start_index..local_end_index], top.0);
+                spans.push(span);
+            } else {
+                let span = Span::from(&self.buffer[local_start_index..local_end_index]);
+                spans.push(span);
+            }
+
             Line::from(spans)
         } else {
             Line::from(spans)
