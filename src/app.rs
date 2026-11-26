@@ -287,14 +287,10 @@ impl App {
                     },
                     Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Enter => {
-                            self.undo_states.push(self.snapshot());
-                            self.redo_states.clear();
                             self.insert(self.index, "\n");
                         }
                         KeyCode::Backspace => {
                             if self.index > 0 {
-                                self.undo_states.push(self.snapshot());
-                                self.redo_states.clear();
                                 let local_index = self.index - self.buffer_start_index - 1;
                                 let starting_of_this_char =
                                     self.buffer.floor_char_boundary(local_index);
@@ -311,8 +307,6 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.undo();
                             } else {
-                                self.undo_states.push(self.snapshot());
-                                self.redo_states.clear();
                                 self.insert(self.index, "z");
                             }
                         }
@@ -320,16 +314,12 @@ impl App {
                             if key.modifiers == KeyModifiers::CONTROL {
                                 self.redo();
                             } else {
-                                self.undo_states.push(self.snapshot());
-                                self.redo_states.clear();
                                 self.insert(self.index, "y");
                             }
                         }
                         KeyCode::Char(value) => {
                             let mut buf = [0u8; 4];
                             let s = value.encode_utf8(&mut buf);
-                            self.undo_states.push(self.snapshot());
-                            self.redo_states.clear();
                             self.insert(self.index, s);
                         }
                         KeyCode::Left => {
@@ -817,8 +807,6 @@ impl App {
             }
             Event::Paste(pasted_string) => {
                 if let Mode::Editing = self.mode {
-                    self.undo_states.push(self.snapshot());
-                    self.redo_states.clear();
                     self.insert(self.index, &pasted_string);
                 }
             }
@@ -994,19 +982,40 @@ impl App {
 
         Line::from(spans)
     }
-    fn snapshot(&self) -> UndoRedoState {
+    fn snapshot(&self, edit: ByteEdit) -> UndoRedoState {
         UndoRedoState {
             index: self.index,
             buffer_start_index: self.buffer_start_index,
             top_visible_line: self.top_visible_line,
+            edit,
         }
+    }
+    fn reparse_syntax_tree(&mut self, edit: ByteEdit) {
+        self.syntax_tree.edit(&InputEdit {
+            start_byte: edit.start_byte,
+            old_end_byte: edit.old_end_byte,
+            new_end_byte: edit.new_end_byte,
+            start_position: Point::new(0, 0),
+            old_end_position: Point::new(0, 0),
+            new_end_position: Point::new(0, 0),
+        });
+        self.syntax_tree = self
+            .parser
+            .parse_with_options(
+                &mut |byte_offset: usize, _position: Point| -> &[u8] {
+                    self.piece_tree.get_bytes_starting_at(byte_offset)
+                },
+                Some(&self.syntax_tree),
+                None,
+            )
+            .unwrap();
     }
     fn undo(&mut self) {
         self.piece_tree.undo();
         if let Some(previous) = self.undo_states.pop() {
             // The current state is the post-edit state, so it is what a
             // subsequent redo must restore.
-            self.redo_states.push(self.snapshot());
+            self.redo_states.push(self.snapshot(previous.edit));
             if previous.buffer_start_index >= self.buffer_start_index
                 && previous.top_visible_line.hard_line_info.hard_line_no
                     < self.top_visible_line.hard_line_info.hard_line_no
@@ -1029,6 +1038,12 @@ impl App {
                 self.compute_position_from_index_due_to_insertion();
                 self.compute_new_horizontal_start_line();
             }
+            let inverse_edit = ByteEdit {
+                start_byte: previous.edit.start_byte,
+                old_end_byte: previous.edit.new_end_byte,
+                new_end_byte: previous.edit.old_end_byte,
+            };
+            self.reparse_syntax_tree(inverse_edit);
         }
     }
     fn redo(&mut self) {
@@ -1036,7 +1051,7 @@ impl App {
         if let Some(next) = self.redo_states.pop() {
             // The current state is the pre-edit state, so it is what a
             // subsequent undo must restore.
-            self.undo_states.push(self.snapshot());
+            self.undo_states.push(self.snapshot(next.edit));
             if next.buffer_start_index >= self.buffer_start_index
                 && next.top_visible_line.hard_line_info.hard_line_no
                     < self.top_visible_line.hard_line_info.hard_line_no
@@ -1057,9 +1072,17 @@ impl App {
                 self.compute_position_from_index_due_to_insertion();
                 self.compute_new_horizontal_start_line();
             }
+            self.reparse_syntax_tree(next.edit);
         }
     }
     fn delete(&mut self, offset: usize, length: usize) {
+        let edit = ByteEdit {
+            start_byte: offset,
+            old_end_byte: offset + length,
+            new_end_byte: offset,
+        };
+        self.undo_states.push(self.snapshot(edit));
+        self.redo_states.clear();
         let previous_lf_count = self.piece_tree.get_line_feed_count();
         self.piece_tree.delete(offset, length);
         let current_lf_count = self.piece_tree.get_line_feed_count();
@@ -1114,26 +1137,16 @@ impl App {
             self.compute_position_from_index_due_to_deletion();
         }
         self.compute_new_horizontal_start_line();
-        self.syntax_tree.edit(&InputEdit {
-            start_byte: offset,
-            old_end_byte: offset + length,
-            new_end_byte: offset,
-            start_position: Point::new(0, 0),
-            old_end_position: Point::new(0, 0),
-            new_end_position: Point::new(0, 0),
-        });
-        self.syntax_tree = self
-            .parser
-            .parse_with_options(
-                &mut |byte_offset: usize, _position: Point| -> &[u8] {
-                    self.piece_tree.get_bytes_starting_at(byte_offset)
-                },
-                Some(&self.syntax_tree),
-                None,
-            )
-            .unwrap();
+        self.reparse_syntax_tree(edit);
     }
     fn insert(&mut self, offset: usize, new_content: &str) {
+        let edit = ByteEdit {
+            start_byte: offset,
+            old_end_byte: offset,
+            new_end_byte: offset + new_content.len(),
+        };
+        self.undo_states.push(self.snapshot(edit));
+        self.redo_states.clear();
         let previous_lf_count = self.piece_tree.get_line_feed_count();
         self.piece_tree.insert(new_content, offset);
         let current_lf_count = self.piece_tree.get_line_feed_count();
@@ -1142,24 +1155,7 @@ impl App {
         self.refresh_to_append_content(new_hard_lines_added);
         self.compute_position_from_index_due_to_insertion();
         self.compute_new_horizontal_start_line();
-        self.syntax_tree.edit(&InputEdit {
-            start_byte: offset,
-            old_end_byte: offset,
-            new_end_byte: offset + new_content.len(),
-            start_position: Point::new(0, 0),
-            old_end_position: Point::new(0, 0),
-            new_end_position: Point::new(0, 0),
-        });
-        self.syntax_tree = self
-            .parser
-            .parse_with_options(
-                &mut |byte_offset: usize, _position: Point| -> &[u8] {
-                    self.piece_tree.get_bytes_starting_at(byte_offset)
-                },
-                Some(&self.syntax_tree),
-                None,
-            )
-            .unwrap();
+        self.reparse_syntax_tree(edit);
     }
     fn refresh_to_append_content(&mut self, new_hard_lines_created: usize) {
         self.buffer.truncate(
@@ -1188,6 +1184,7 @@ impl App {
             &mut self.buffer,
         );
         self.render_lines.clear();
+        self.no_of_hard_lines_queried = 0;
         if self.wrap {
             self.compute_line_starts_with_wrap();
         } else {
@@ -1800,10 +1797,18 @@ enum LineType {
     Empty,
 }
 
+#[derive(Clone, Copy)]
+struct ByteEdit {
+    start_byte: usize,
+    old_end_byte: usize,
+    new_end_byte: usize,
+}
+
 struct UndoRedoState {
     top_visible_line: TopVisibleLine,
     buffer_start_index: usize,
     index: usize,
+    edit: ByteEdit,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TextEditorLine {
