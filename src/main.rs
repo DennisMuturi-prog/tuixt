@@ -19,6 +19,9 @@ fn main() -> io::Result<()> {
                     Ok(source) =>{
                         (arg1,source)
                     },
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                        (arg1, String::new())
+                    }
                     Err(err) => {
                         panic!("the err is {}",err);
                     },

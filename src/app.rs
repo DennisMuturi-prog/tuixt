@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, min},
-    io,
+    fs, io,
     ops::Range,
     usize,
 };
@@ -219,9 +219,10 @@ impl App {
             .block(Block::default().borders(Borders::ALL));
         let current_keys_hint = {
             match self.mode {
-                Mode::Normal => {
-                    Span::styled("(q) to quit / (e) to edit", Style::default().fg(Color::Red))
-                }
+                Mode::Normal => Span::styled(
+                    "(q) to quit / (e) to edit / (ctrl+s) to save",
+                    Style::default().fg(Color::Red),
+                ),
                 Mode::Editing => Span::styled(
                     "(ESC) to go to normal mode",
                     Style::default().fg(Color::Red),
@@ -256,14 +257,33 @@ impl App {
         }
     }
 
+    pub fn save_file(&self) -> io::Result<()> {
+        if self.file_path.is_empty() {
+            return Ok(());
+        }
+        let mut content = String::with_capacity(self.piece_tree.get_tree_len());
+        self.piece_tree.get_text(&mut content);
+        fs::write(&self.file_path, content)
+    }
+
     fn handle_events(&mut self) -> io::Result<()> {
         match event::read()? {
-            Event::Key(key) => {
-                if key.kind == event::KeyEventKind::Release {
-                    // Skip events that are not KeyEventKind::Press
-                    return Ok(());
+            Event::Key(key) => self.handle_key_event(key)?,
+            Event::Paste(pasted_string) => {
+                if let Mode::Editing = self.mode {
+                    self.insert(self.index, &pasted_string);
                 }
-                match self.mode {
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+
+    fn handle_key_event(&mut self, key: event::KeyEvent) -> io::Result<()> {
+        if key.kind == event::KeyEventKind::Release {
+            return Ok(());
+        }
+        match self.mode {
                     Mode::Normal => match key.code {
                         KeyCode::Char('e') => {
                             self.mode = Mode::Editing;
@@ -272,10 +292,14 @@ impl App {
                         KeyCode::Char('q') => {
                             self.mode = Mode::Exiting;
                         }
+                        KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.save_file()?;
+                        }
                         _ => {}
                     },
                     Mode::Exiting => match key.code {
                         KeyCode::Char('y') => {
+                            self.save_file()?;
                             self.exit = true;
                             return Ok(());
                         }
@@ -804,14 +828,6 @@ impl App {
                     },
                     _ => {}
                 }
-            }
-            Event::Paste(pasted_string) => {
-                if let Mode::Editing = self.mode {
-                    self.insert(self.index, &pasted_string);
-                }
-            }
-            _ => (),
-        }
         Ok(())
     }
     fn compute_next_line_col(&mut self) {
@@ -1912,4 +1928,98 @@ pub fn build_capture_styles(query: &Query) -> Vec<Style> {
         .iter()
         .map(|name| style_for_capture(name))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::KeyEvent;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("tuixt_test_{name}_{nanos}.rs"))
+    }
+
+    fn make_test_app(initial_content: &str, file_path: String) -> App {
+        let language = tree_sitter_rust::LANGUAGE.into();
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+        let query = Query::new(&language, tree_sitter_rust::HIGHLIGHTS_QUERY).unwrap();
+        let styles = build_capture_styles(&query);
+        let mut app = App::new(initial_content, 80, 24, true, parser, file_path, query, styles);
+        app.compute_line_starts_with_wrap();
+        app
+    }
+
+    #[test]
+    fn ctrl_s_in_normal_mode_creates_new_file_and_saves_content() {
+        let path = temp_file_path("ctrl_s_create");
+        assert!(!path.exists());
+
+        let mut app = make_test_app("fn main() {}", path.to_string_lossy().into_owned());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() {}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_s_in_normal_mode_overwrites_existing_file() {
+        let path = temp_file_path("ctrl_s_overwrite");
+        fs::write(&path, "old content").unwrap();
+
+        let mut app = make_test_app("old content", path.to_string_lossy().into_owned());
+        app.insert(0, "new ");
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new old content");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn exiting_yes_creates_and_saves_file() {
+        let path = temp_file_path("exit_yes");
+        assert!(!path.exists());
+
+        let mut app = make_test_app("hello", path.to_string_lossy().into_owned());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(app.mode, Mode::Exiting));
+        assert!(!app.exit);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.exit);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn exiting_no_does_not_create_file() {
+        let path = temp_file_path("exit_no");
+        assert!(!path.exists());
+
+        let mut app = make_test_app("hello", path.to_string_lossy().into_owned());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .unwrap();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(app.exit);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_file_with_empty_path_is_noop() {
+        let mut app = make_test_app("hello", String::new());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap();
+    }
 }
