@@ -594,7 +594,7 @@ impl PieceTree {
         let mut offset = offset;
         let mut current_node = root;
         let black_leaf = &self.black_leaf;
-        let mut offset_in_node = 0;
+        let mut offset_in_node=0;
         loop {
             if offset < current_node.left_subtree_len {
                 let candidate_next_node = current_node.left.as_ref().unwrap();

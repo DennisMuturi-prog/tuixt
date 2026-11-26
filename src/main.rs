@@ -6,7 +6,7 @@ use crossterm::{
     execute,
     terminal::size,
 };
-use tree_sitter::{Parser, Query, QueryCursor};
+use tree_sitter::{Parser, Query};
 use tuixt::app::{App, build_capture_styles};
 
 fn main() -> io::Result<()> {
@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
         .expect("Error loading Rust grammar");
     let highlights_query = Query::new(&language, tree_sitter_rust::HIGHLIGHTS_QUERY).unwrap(); 
     let highlights_styles= build_capture_styles(&highlights_query);
-    let mut app = App::new(&file_contents, (initial_window_width-6) as usize, (initial_window_height-6) as usize, true, parser,file_path,highlights_query,highlights_styles);
+    let mut app = App::new(&file_contents, (initial_window_width-5) as usize, (initial_window_height-6) as usize, true, parser,file_path,highlights_query,highlights_styles);
     ratatui::run(|terminal| app.run(terminal))?;
     execute!(std::io::stdout(), DisableBracketedPaste)?;
     execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape)

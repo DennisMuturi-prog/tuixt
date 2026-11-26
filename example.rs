@@ -110,6 +110,6 @@ pub fn showcase_syntax() {
         let ptr: *const u8 = &hex;
         let _val = *ptr;
     }
-
+    println!("hello world");
     let _ = (float, ch, byte_str, escaped, raw, closure(3, 5), map);
 }

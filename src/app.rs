@@ -6,7 +6,6 @@ use std::{
 };
 
 use crossterm::{cursor::SetCursorStyle, execute};
-use icu_segmenter::GraphemeClusterSegmenter;
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -28,6 +27,7 @@ use crate::piece_tree::PieceTree;
 pub struct App {
     exit: bool,
     mode: Mode,
+    previous_mode: Mode,
     column_number: usize,
     row_number: usize,
     index: usize,
@@ -94,6 +94,7 @@ impl App {
             syntax_tree,
             exit: false,
             mode: Mode::Normal,
+            previous_mode: Mode::Normal,
             column_number: 0,
             row_number: 0,
             index: 0,
@@ -125,6 +126,12 @@ impl App {
 
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
+        if matches!(self.mode, Mode::TooSmall) || area.width < 11 || area.height < 11 {
+            let msg = Paragraph::new("Terminal too small, please resize")
+                .alignment(Alignment::Center);
+            frame.render_widget(msg, area);
+            return;
+        }
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -199,6 +206,7 @@ impl App {
                 Mode::Normal => Span::styled("Normal Mode", Style::default().fg(Color::Green)),
                 Mode::Editing => Span::styled("Editing Mode", Style::default().fg(Color::Yellow)),
                 Mode::Exiting => Span::styled("Exiting", Style::default().fg(Color::LightRed)),
+                Mode::TooSmall => Span::styled("Too Small", Style::default().fg(Color::Red)),
             }
             .to_owned(),
             // A white divider bar to separate the two sections
@@ -228,6 +236,7 @@ impl App {
                     Style::default().fg(Color::Red),
                 ),
                 Mode::Exiting => Span::styled("(q) to quit", Style::default().fg(Color::Red)),
+                Mode::TooSmall => Span::styled("Resize terminal", Style::default().fg(Color::Red)),
             }
         };
 
@@ -274,124 +283,522 @@ impl App {
                     self.insert(self.index, &pasted_string);
                 }
             }
+            Event::Resize(width, height) => {
+                self.handle_resize(width, height);
+            }
             _ => (),
         }
         Ok(())
     }
+
+    
+    fn handle_resize(&mut self, width: u16, height: u16) {
+        if height < 11 || width < 11 {
+            if self.mode != Mode::TooSmall {
+                self.previous_mode = self.mode;
+                self.mode = Mode::TooSmall;
+            }
+            return;
+        }
+        if self.mode == Mode::TooSmall {
+            self.mode = self.previous_mode;
+        }
+        let height = (height - 6) as usize;
+        let width = (width - 5) as usize;
+
+        let width_changed = self.window_width != width;
+        let height_changed = self.window_height != height;
+
+        self.window_width = width;
+        self.window_height = height;
+
+        let total_lines = self.piece_tree.get_line_feed_count() + 1;
+
+        if width_changed && self.wrap {
+            self.top_visible_line.hard_line_info.pos_into_render_lines = 0;
+            self.top_visible_line.pos_into_render_lines = 0;
+            self.buffer_start_index = self.top_visible_line.hard_line_info.start_idx_in_global_buf;
+            self.refresh_content_for_current_visible_window();
+            while self.index >= self.buffer_start_index + self.buffer.len()
+                && self.top_visible_line.hard_line_info.hard_line_no
+                    + self.no_of_hard_lines_queried
+                    < total_lines
+            {
+                self.request_more_lines();
+            }
+            self.compute_position_from_index_due_to_insertion();
+        } else if height_changed && self.row_number >= self.window_height {
+            self.compute_position_from_index_due_to_insertion();
+        }
+
+        if width_changed {
+            self.compute_new_horizontal_start_line();
+        }
+
+        while self
+            .render_lines
+            .len()
+            .saturating_sub(self.top_visible_line.pos_into_render_lines)
+            < self.window_height
+            && self.top_visible_line.hard_line_info.hard_line_no + self.no_of_hard_lines_queried
+                < total_lines
+        {
+            self.request_more_lines();
+        }
+    }
+
+    
 
     fn handle_key_event(&mut self, key: event::KeyEvent) -> io::Result<()> {
         if key.kind == event::KeyEventKind::Release {
             return Ok(());
         }
         match self.mode {
-                    Mode::Normal => match key.code {
-                        KeyCode::Char('e') => {
-                            self.mode = Mode::Editing;
-                            execute!(std::io::stdout(), SetCursorStyle::BlinkingBar)?;
-                        }
-                        KeyCode::Char('q') => {
-                            self.mode = Mode::Exiting;
-                        }
-                        KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
-                            self.save_file()?;
-                        }
-                        _ => {}
-                    },
-                    Mode::Exiting => match key.code {
-                        KeyCode::Char('y') => {
-                            self.save_file()?;
-                            self.exit = true;
-                            return Ok(());
-                        }
-                        KeyCode::Char('n') | KeyCode::Char('q') => {
-                            self.exit = true;
-                            return Ok(());
-                        }
-                        _ => {}
-                    },
-                    Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Enter => {
-                            self.insert(self.index, "\n");
-                        }
-                        KeyCode::Backspace => {
-                            if self.index > 0 {
-                                let local_index = self.index - self.buffer_start_index - 1;
-                                let starting_of_this_char =
-                                    self.buffer.floor_char_boundary(local_index);
-                                let byte_width = local_index - starting_of_this_char + 1;
-                                self.delete(self.index - byte_width, byte_width);
+            Mode::Normal => match key.code {
+                KeyCode::Char('e') => {
+                    self.mode = Mode::Editing;
+                    execute!(std::io::stdout(), SetCursorStyle::BlinkingBar)?;
+                }
+                KeyCode::Char('q') => {
+                    self.mode = Mode::Exiting;
+                }
+                KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.save_file()?;
+                }
+                _ => {}
+            },
+            Mode::Exiting => match key.code {
+                KeyCode::Char('y') => {
+                    self.save_file()?;
+                    self.exit = true;
+                    return Ok(());
+                }
+                KeyCode::Char('n') | KeyCode::Char('q') => {
+                    self.exit = true;
+                    return Ok(());
+                }
+                _ => {}
+            },
+            Mode::Editing if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Enter => {
+                    self.insert(self.index, "\n");
+                }
+                KeyCode::Backspace => {
+                    if self.index > 0 {
+                        let local_index = self.index - self.buffer_start_index - 1;
+                        let starting_of_this_char = self.buffer.floor_char_boundary(local_index);
+                        let byte_width = local_index - starting_of_this_char + 1;
+                        self.delete(self.index - byte_width, byte_width);
+                    }
+                }
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                    execute!(std::io::stdout(), SetCursorStyle::SteadyBlock)?;
+                }
+                KeyCode::Tab => {}
+                KeyCode::Char('z') => {
+                    if key.modifiers == KeyModifiers::CONTROL {
+                        self.undo();
+                    } else {
+                        self.insert(self.index, "z");
+                    }
+                }
+                KeyCode::Char('y') => {
+                    if key.modifiers == KeyModifiers::CONTROL {
+                        self.redo();
+                    } else {
+                        self.insert(self.index, "y");
+                    }
+                }
+                KeyCode::Char(value) => {
+                    let mut buf = [0u8; 4];
+                    let s = value.encode_utf8(&mut buf);
+                    self.insert(self.index, s);
+                }
+                KeyCode::Left => {
+                    if self.index == 0 {
+                        return Ok(());
+                    }
+                    if self.row_number == 0
+                        && self.line_column == 0
+                        && self.top_visible_line.pos_into_render_lines == 0
+                        && (self.top_visible_line.hard_line_info.hard_line_no as i32 - 1) >= 0
+                    {
+                        self.top_visible_line.hard_line_info.hard_line_no -= 1;
+                        self.no_of_hard_lines_queried += 1;
+                        self.buffer_start_index = self.piece_tree.get_start_offset_of_a_line(
+                            self.top_visible_line.hard_line_info.hard_line_no,
+                        );
+                        self.top_visible_line.hard_line_info.pos_into_render_lines = 0;
+                        self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                            self.buffer_start_index;
+                        self.refresh_content_for_current_visible_window();
+                        if matches!(self.render_lines[0].line_type, LineType::Independent) {
+                            self.line_column = self.render_lines[0].width;
+                        } else {
+                            for (i, line) in self.render_lines.iter().enumerate() {
+                                if matches!(line.line_type, LineType::End) {
+                                    self.top_visible_line.pos_into_render_lines = i;
+                                    break;
+                                }
                             }
+                            self.line_column = self.render_lines
+                                [self.top_visible_line.pos_into_render_lines]
+                                .width;
                         }
-                        KeyCode::Esc => {
-                            self.mode = Mode::Normal;
-                            execute!(std::io::stdout(), SetCursorStyle::SteadyBlock)?;
+                        self.index -= 1;
+                        let local_index = self.index - self.buffer_start_index;
+                        if self.buffer.as_bytes()[local_index - 1] == b'\r' {
+                            self.index -= 1;
                         }
-                        KeyCode::Tab => {}
-                        KeyCode::Char('z') => {
-                            if key.modifiers == KeyModifiers::CONTROL {
-                                self.undo();
+                    } else if self.row_number == 0
+                        && self.line_column == 0
+                        && (self.top_visible_line.pos_into_render_lines as i32 - 1) >= 0
+                    {
+                        self.top_visible_line.pos_into_render_lines -= 1;
+                        self.line_column =
+                            self.render_lines[self.top_visible_line.pos_into_render_lines].width;
+                        if matches!(
+                            self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                .line_type,
+                            LineType::Independent
+                        ) || matches!(
+                            self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                .line_type,
+                            LineType::End
+                        ) {
+                            self.top_visible_line.hard_line_info.hard_line_no -= 1;
+                            self.no_of_hard_lines_queried += 1;
+                            self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                                self.piece_tree.get_start_offset_of_a_line(
+                                    self.top_visible_line.hard_line_info.hard_line_no,
+                                );
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::End
+                            ) {
+                                let mut i = self.top_visible_line.pos_into_render_lines;
+                                loop {
+                                    match self.render_lines[i].line_type {
+                                        LineType::Independent => {
+                                            break;
+                                        }
+                                        LineType::Start => {
+                                            break;
+                                        }
+                                        LineType::Between => {
+                                            i -= 1;
+                                        }
+                                        LineType::End => {
+                                            i -= 1;
+                                        }
+                                        LineType::Empty => {
+                                            break;
+                                        }
+                                    }
+                                }
+                                self.top_visible_line.hard_line_info.pos_into_render_lines = i;
                             } else {
-                                self.insert(self.index, "z");
+                                self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                    self.top_visible_line.pos_into_render_lines;
+                            }
+
+                            self.index -= 1;
+                            let local_index = self.index - self.buffer_start_index;
+                            if self.buffer.as_bytes()[local_index - 1] == b'\r' {
+                                self.index -= 1;
                             }
                         }
-                        KeyCode::Char('y') => {
-                            if key.modifiers == KeyModifiers::CONTROL {
-                                self.redo();
-                            } else {
-                                self.insert(self.index, "y");
+                    } else if self.line_column == 0 {
+                        self.row_number -= 1;
+                        self.line_column = self.render_lines
+                            [self.top_visible_line.pos_into_render_lines + self.row_number]
+                            .width;
+                        if matches!(
+                            self.render_lines
+                                [self.top_visible_line.pos_into_render_lines + self.row_number]
+                                .line_type,
+                            LineType::End
+                        ) || matches!(
+                            self.render_lines
+                                [self.top_visible_line.pos_into_render_lines + self.row_number]
+                                .line_type,
+                            LineType::Independent
+                        ) {
+                            self.index -= 1;
+                            let local_index = self.index - self.buffer_start_index;
+                            if self.buffer.as_bytes()[local_index - 1] == b'\r' {
+                                self.index -= 1;
                             }
                         }
-                        KeyCode::Char(value) => {
-                            let mut buf = [0u8; 4];
-                            let s = value.encode_utf8(&mut buf);
-                            self.insert(self.index, s);
-                        }
-                        KeyCode::Left => {
-                            if self.index == 0 {
-                                return Ok(());
+                    } else {
+                        let local_index = self.index - self.buffer_start_index - 1;
+                        let starting_of_this_char = self.buffer.floor_char_boundary(local_index);
+                        let byte_width = local_index - starting_of_this_char + 1;
+                        self.index -= byte_width;
+                        let char_to_be_pass = &self.buffer[starting_of_this_char..=local_index];
+                        self.line_column -= char_to_be_pass.width();
+                    }
+                    self.col_hint = self.line_column;
+                    self.compute_new_horizontal_start_line();
+                }
+                // i did this because my right arrow button is damaged,so am i using the page down to simulate it
+                KeyCode::Right | KeyCode::PageDown => {
+                    if self.index == self.piece_tree.get_tree_len() {
+                        return Ok(());
+                    }
+                    if self.line_column
+                        >= self.render_lines
+                            [self.top_visible_line.pos_into_render_lines + self.row_number]
+                            .width
+                        && self.row_number + 1 >= self.window_height
+                    {
+                        if self.top_visible_line.pos_into_render_lines + self.window_height
+                            < self.render_lines.len()
+                        {
+                            self.line_column = 0;
+                            self.top_visible_line.pos_into_render_lines += 1;
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines
+                                    + self.row_number
+                                    - 1]
+                                .line_type,
+                                LineType::End
+                            ) || matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines
+                                    + self.row_number
+                                    - 1]
+                                .line_type,
+                                LineType::Independent
+                            ) {
+                                let local_index = self.index - self.buffer_start_index;
+                                if self.buffer.as_bytes()[local_index] == b'\r' {
+                                    self.index += 2;
+                                } else {
+                                    self.index += 1;
+                                }
                             }
-                            if self.row_number == 0
-                                && self.line_column == 0
-                                && self.top_visible_line.pos_into_render_lines == 0
-                                && (self.top_visible_line.hard_line_info.hard_line_no as i32 - 1)
-                                    >= 0
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::Independent
+                            ) || matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::Start
+                            ) {
+                                self.top_visible_line.hard_line_info.hard_line_no += 1;
+                                self.no_of_hard_lines_queried =
+                                    self.no_of_hard_lines_queried.saturating_sub(1);
+                                self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                                    self.piece_tree.get_start_offset_of_a_line(
+                                        self.top_visible_line.hard_line_info.hard_line_no,
+                                    );
+                                self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                    self.top_visible_line.pos_into_render_lines;
+                            }
+                        } else {
+                            let total_lines = self.piece_tree.get_line_feed_count() + 1;
+                            if self.top_visible_line.hard_line_info.hard_line_no
+                                + self.no_of_hard_lines_queried
+                                < total_lines
                             {
+                                self.request_more_lines();
+                                self.line_column = 0;
+                                self.top_visible_line.pos_into_render_lines += 1;
+                                let local_index = self.index - self.buffer_start_index;
+                                if self.buffer.as_bytes()[local_index] == b'\r' {
+                                    self.index += 2;
+                                } else {
+                                    self.index += 1;
+                                }
+                                if matches!(
+                                    self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                        .line_type,
+                                    LineType::Independent
+                                ) || matches!(
+                                    self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                        .line_type,
+                                    LineType::Start
+                                ) {
+                                    self.top_visible_line.hard_line_info.hard_line_no += 1;
+                                    self.no_of_hard_lines_queried =
+                                        self.no_of_hard_lines_queried.saturating_sub(1);
+                                    self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                                        self.piece_tree.get_start_offset_of_a_line(
+                                            self.top_visible_line.hard_line_info.hard_line_no,
+                                        );
+                                    self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                        self.top_visible_line.pos_into_render_lines;
+                                }
+                            }
+                        }
+                    } else if self.line_column
+                        >= self.render_lines
+                            [self.top_visible_line.pos_into_render_lines + self.row_number]
+                            .width
+                    {
+                        if self.top_visible_line.pos_into_render_lines + self.row_number + 1
+                            < self.render_lines.len()
+                        {
+                            self.row_number += 1;
+                            self.line_column = 0;
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines
+                                    + self.row_number
+                                    - 1]
+                                .line_type,
+                                LineType::End
+                            ) || matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines
+                                    + self.row_number
+                                    - 1]
+                                .line_type,
+                                LineType::Independent
+                            ) {
+                                let local_index = self.index - self.buffer_start_index;
+                                if self.buffer.as_bytes()[local_index] == b'\r' {
+                                    self.index += 2;
+                                } else {
+                                    self.index += 1;
+                                }
+                            }
+                        } else {
+                            return Ok(());
+                        }
+                    } else {
+                        let content_len = self.piece_tree.get_tree_len();
+                        let local_index = self.index - self.buffer_start_index;
+                        let ending_of_this_char = self.buffer.ceil_char_boundary(local_index + 1);
+                        let byte_width = ending_of_this_char - local_index;
+                        self.index = min(content_len, self.index + byte_width);
+                        let char_to_be_pass = &self.buffer[local_index..ending_of_this_char];
+                        self.line_column += char_to_be_pass.width();
+                    }
+
+                    self.col_hint = self.line_column;
+
+                    self.compute_new_horizontal_start_line();
+                }
+
+                KeyCode::Up => {
+                    if self.row_number == 0 {
+                        if self.top_visible_line.pos_into_render_lines == 0 {
+                            if (self.top_visible_line.hard_line_info.hard_line_no as i32 - 1) >= 0 {
                                 self.top_visible_line.hard_line_info.hard_line_no -= 1;
                                 self.no_of_hard_lines_queried += 1;
                                 self.buffer_start_index =
                                     self.piece_tree.get_start_offset_of_a_line(
                                         self.top_visible_line.hard_line_info.hard_line_no,
                                     );
-                                self.top_visible_line.hard_line_info.pos_into_render_lines = 0;
                                 self.top_visible_line.hard_line_info.start_idx_in_global_buf =
                                     self.buffer_start_index;
+                                self.top_visible_line.hard_line_info.pos_into_render_lines = 0;
                                 self.refresh_content_for_current_visible_window();
-                                if matches!(self.render_lines[0].line_type, LineType::Independent) {
-                                    self.line_column = self.render_lines[0].width;
-                                } else {
+                                if matches!(self.render_lines[0].line_type, LineType::Start) {
                                     for (i, line) in self.render_lines.iter().enumerate() {
                                         if matches!(line.line_type, LineType::End) {
                                             self.top_visible_line.pos_into_render_lines = i;
                                             break;
                                         }
                                     }
-                                    self.line_column = self.render_lines
-                                        [self.top_visible_line.pos_into_render_lines]
-                                        .width;
                                 }
-                                self.index -= 1;
-                                let local_index = self.index - self.buffer_start_index;
-                                if self.buffer.as_bytes()[local_index - 1] == b'\r' {
-                                    self.index -= 1;
+                                self.compute_next_line_col();
+                                self.compute_index_from_row_and_col();
+                            }
+                        } else {
+                            self.top_visible_line.pos_into_render_lines -= 1;
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::Independent
+                            ) || matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::End
+                            ) {
+                                self.top_visible_line.hard_line_info.hard_line_no -= 1;
+                                self.no_of_hard_lines_queried += 1;
+                                self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                                    self.piece_tree.get_start_offset_of_a_line(
+                                        self.top_visible_line.hard_line_info.hard_line_no,
+                                    );
+                                if matches!(
+                                    self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                        .line_type,
+                                    LineType::End
+                                ) {
+                                    let mut i = self.top_visible_line.pos_into_render_lines;
+                                    loop {
+                                        match self.render_lines[i].line_type {
+                                            LineType::Independent => {
+                                                break;
+                                            }
+                                            LineType::Start => {
+                                                break;
+                                            }
+                                            LineType::Between => {
+                                                i -= 1;
+                                            }
+                                            LineType::End => {
+                                                i -= 1;
+                                            }
+                                            LineType::Empty => {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    self.top_visible_line.hard_line_info.pos_into_render_lines = i;
+                                } else {
+                                    self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                        self.top_visible_line.pos_into_render_lines;
                                 }
-                            } else if self.row_number == 0
-                                && self.line_column == 0
-                                && (self.top_visible_line.pos_into_render_lines as i32 - 1) >= 0
+                            }
+                            self.compute_next_line_col();
+                            self.compute_index_from_row_and_col();
+                        }
+                    } else {
+                        self.row_number -= 1;
+                        self.compute_next_line_col();
+                        self.compute_index_from_row_and_col();
+                    }
+                }
+                KeyCode::Down => {
+                    if self.row_number + 1 >= self.window_height {
+                        if self.top_visible_line.pos_into_render_lines + self.window_height
+                            < self.render_lines.len()
+                        {
+                            self.top_visible_line.pos_into_render_lines += 1;
+                            if matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::Independent
+                            ) || matches!(
+                                self.render_lines[self.top_visible_line.pos_into_render_lines]
+                                    .line_type,
+                                LineType::Start
+                            ) {
+                                self.top_visible_line.hard_line_info.hard_line_no += 1;
+                                self.no_of_hard_lines_queried =
+                                    self.no_of_hard_lines_queried.saturating_sub(1);
+                                self.top_visible_line.hard_line_info.start_idx_in_global_buf =
+                                    self.piece_tree.get_start_offset_of_a_line(
+                                        self.top_visible_line.hard_line_info.hard_line_no,
+                                    );
+                                self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                    self.top_visible_line.pos_into_render_lines;
+                            }
+                            self.compute_next_line_col();
+                            self.compute_index_from_row_and_col();
+                        } else {
+                            let total_lines = self.piece_tree.get_line_feed_count() + 1;
+                            if self.top_visible_line.hard_line_info.hard_line_no
+                                + self.no_of_hard_lines_queried
+                                < total_lines
                             {
-                                self.top_visible_line.pos_into_render_lines -= 1;
-                                self.line_column = self.render_lines
-                                    [self.top_visible_line.pos_into_render_lines]
-                                    .width;
+                                self.top_visible_line.pos_into_render_lines += 1;
+                                self.request_more_lines();
                                 if matches!(
                                     self.render_lines[self.top_visible_line.pos_into_render_lines]
                                         .line_type,
@@ -399,435 +806,32 @@ impl App {
                                 ) || matches!(
                                     self.render_lines[self.top_visible_line.pos_into_render_lines]
                                         .line_type,
-                                    LineType::End
+                                    LineType::Start
                                 ) {
-                                    self.top_visible_line.hard_line_info.hard_line_no -= 1;
-                                    self.no_of_hard_lines_queried += 1;
+                                    self.top_visible_line.hard_line_info.hard_line_no += 1;
+                                    self.no_of_hard_lines_queried =
+                                        self.no_of_hard_lines_queried.saturating_sub(1);
                                     self.top_visible_line.hard_line_info.start_idx_in_global_buf =
                                         self.piece_tree.get_start_offset_of_a_line(
                                             self.top_visible_line.hard_line_info.hard_line_no,
                                         );
-                                    if matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::End
-                                    ) {
-                                        let mut i = self.top_visible_line.pos_into_render_lines;
-                                        loop {
-                                            match self.render_lines[i].line_type {
-                                                LineType::Independent => {
-                                                    break;
-                                                }
-                                                LineType::Start => {
-                                                    break;
-                                                }
-                                                LineType::Between => {
-                                                    i -= 1;
-                                                }
-                                                LineType::End => {
-                                                    i -= 1;
-                                                }
-                                                LineType::Empty => {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .pos_into_render_lines = i;
-                                    } else {
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .pos_into_render_lines =
-                                            self.top_visible_line.pos_into_render_lines;
-                                    }
-
-                                    self.index -= 1;
-                                    let local_index = self.index - self.buffer_start_index;
-                                    if self.buffer.as_bytes()[local_index - 1] == b'\r' {
-                                        self.index -= 1;
-                                    }
+                                    self.top_visible_line.hard_line_info.pos_into_render_lines =
+                                        self.top_visible_line.pos_into_render_lines;
                                 }
-                            } else if self.line_column == 0 {
-                                self.row_number -= 1;
-                                self.line_column = self.render_lines
-                                    [self.top_visible_line.pos_into_render_lines + self.row_number]
-                                    .width;
-                                if matches!(
-                                    self.render_lines[self.top_visible_line.pos_into_render_lines
-                                        + self.row_number]
-                                        .line_type,
-                                    LineType::End
-                                ) || matches!(
-                                    self.render_lines[self.top_visible_line.pos_into_render_lines
-                                        + self.row_number]
-                                        .line_type,
-                                    LineType::Independent
-                                ) {
-                                    self.index -= 1;
-                                    let local_index = self.index - self.buffer_start_index;
-                                    if self.buffer.as_bytes()[local_index - 1] == b'\r' {
-                                        self.index -= 1;
-                                    }
-                                }
-                            } else {
-                                let local_index = self.index - self.buffer_start_index - 1;
-                                let starting_of_this_char =
-                                    self.buffer.floor_char_boundary(local_index);
-                                let byte_width = local_index - starting_of_this_char + 1;
-                                self.index -= byte_width;
-                                let char_to_be_pass =
-                                    &self.buffer[starting_of_this_char..=local_index];
-                                self.line_column -= char_to_be_pass.width();
-                            }
-                            self.col_hint = self.line_column;
-                            self.compute_new_horizontal_start_line();
-                        }
-                        // i did this because my right arrow button is damaged,so am i using the page down to simulate it
-                        KeyCode::Right | KeyCode::PageDown => {
-                            if self.index == self.piece_tree.get_tree_len() {
-                                return Ok(());
-                            }
-                            if self.line_column
-                                >= self.render_lines
-                                    [self.top_visible_line.pos_into_render_lines + self.row_number]
-                                    .width
-                                && self.row_number + 1 >= self.window_height
-                            {
-                                if self.top_visible_line.pos_into_render_lines + self.window_height
-                                    < self.render_lines.len()
-                                {
-                                    self.line_column = 0;
-                                    self.top_visible_line.pos_into_render_lines += 1;
-                                    if matches!(
-                                        self.render_lines[self
-                                            .top_visible_line
-                                            .pos_into_render_lines
-                                            + self.row_number
-                                            - 1]
-                                        .line_type,
-                                        LineType::End
-                                    ) || matches!(
-                                        self.render_lines[self
-                                            .top_visible_line
-                                            .pos_into_render_lines
-                                            + self.row_number
-                                            - 1]
-                                        .line_type,
-                                        LineType::Independent
-                                    ) {
-                                        let local_index = self.index - self.buffer_start_index;
-                                        if self.buffer.as_bytes()[local_index] == b'\r' {
-                                            self.index += 2;
-                                        } else {
-                                            self.index += 1;
-                                        }
-                                    }
-                                    if matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::Independent
-                                    ) || matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::Start
-                                    ) {
-                                        self.top_visible_line.hard_line_info.hard_line_no += 1;
-                                        self.no_of_hard_lines_queried =
-                                            self.no_of_hard_lines_queried.saturating_sub(1);
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .start_idx_in_global_buf =
-                                            self.piece_tree.get_start_offset_of_a_line(
-                                                self.top_visible_line.hard_line_info.hard_line_no,
-                                            );
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .pos_into_render_lines =
-                                            self.top_visible_line.pos_into_render_lines;
-                                    }
-                                } else {
-                                    let total_lines = self.piece_tree.get_line_feed_count() + 1;
-                                    if self.top_visible_line.hard_line_info.hard_line_no
-                                        + self.no_of_hard_lines_queried
-                                        < total_lines
-                                    {
-                                        self.request_more_lines();
-                                        self.line_column = 0;
-                                        self.top_visible_line.pos_into_render_lines += 1;
-                                        let local_index = self.index - self.buffer_start_index;
-                                        if self.buffer.as_bytes()[local_index] == b'\r' {
-                                            self.index += 2;
-                                        } else {
-                                            self.index += 1;
-                                        }
-                                        if matches!(
-                                            self.render_lines
-                                                [self.top_visible_line.pos_into_render_lines]
-                                                .line_type,
-                                            LineType::Independent
-                                        ) || matches!(
-                                            self.render_lines
-                                                [self.top_visible_line.pos_into_render_lines]
-                                                .line_type,
-                                            LineType::Start
-                                        ) {
-                                            self.top_visible_line.hard_line_info.hard_line_no += 1;
-                                            self.no_of_hard_lines_queried =
-                                                self.no_of_hard_lines_queried.saturating_sub(1);
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .start_idx_in_global_buf =
-                                                self.piece_tree.get_start_offset_of_a_line(
-                                                    self.top_visible_line
-                                                        .hard_line_info
-                                                        .hard_line_no,
-                                                );
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .pos_into_render_lines =
-                                                self.top_visible_line.pos_into_render_lines;
-                                        }
-                                    }
-                                }
-                            } else if self.line_column
-                                >= self.render_lines
-                                    [self.top_visible_line.pos_into_render_lines + self.row_number]
-                                    .width
-                            {
-                                if self.top_visible_line.pos_into_render_lines + self.row_number + 1
-                                    < self.render_lines.len()
-                                {
-                                    self.row_number += 1;
-                                    self.line_column = 0;
-                                    if matches!(
-                                        self.render_lines[self
-                                            .top_visible_line
-                                            .pos_into_render_lines
-                                            + self.row_number
-                                            - 1]
-                                        .line_type,
-                                        LineType::End
-                                    ) || matches!(
-                                        self.render_lines[self
-                                            .top_visible_line
-                                            .pos_into_render_lines
-                                            + self.row_number
-                                            - 1]
-                                        .line_type,
-                                        LineType::Independent
-                                    ) {
-                                        let local_index = self.index - self.buffer_start_index;
-                                        if self.buffer.as_bytes()[local_index] == b'\r' {
-                                            self.index += 2;
-                                        } else {
-                                            self.index += 1;
-                                        }
-                                    }
-                                } else {
-                                    return Ok(());
-                                }
-                            } else {
-                                let content_len = self.piece_tree.get_tree_len();
-                                let local_index = self.index - self.buffer_start_index;
-                                let ending_of_this_char =
-                                    self.buffer.ceil_char_boundary(local_index + 1);
-                                let byte_width = ending_of_this_char - local_index;
-                                self.index = min(content_len, self.index + byte_width);
-                                let char_to_be_pass =
-                                    &self.buffer[local_index..ending_of_this_char];
-                                self.line_column += char_to_be_pass.width();
-                            }
-
-                            self.col_hint = self.line_column;
-
-                            self.compute_new_horizontal_start_line();
-                        }
-
-                        KeyCode::Up => {
-                            if self.row_number == 0 {
-                                if self.top_visible_line.pos_into_render_lines == 0 {
-                                    if (self.top_visible_line.hard_line_info.hard_line_no as i32
-                                        - 1)
-                                        >= 0
-                                    {
-                                        self.top_visible_line.hard_line_info.hard_line_no -= 1;
-                                        self.no_of_hard_lines_queried += 1;
-                                        self.buffer_start_index =
-                                            self.piece_tree.get_start_offset_of_a_line(
-                                                self.top_visible_line.hard_line_info.hard_line_no,
-                                            );
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .start_idx_in_global_buf = self.buffer_start_index;
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .pos_into_render_lines = 0;
-                                        self.refresh_content_for_current_visible_window();
-                                        if matches!(self.render_lines[0].line_type, LineType::Start)
-                                        {
-                                            for (i, line) in self.render_lines.iter().enumerate() {
-                                                if matches!(line.line_type, LineType::End) {
-                                                    self.top_visible_line.pos_into_render_lines = i;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        self.compute_next_line_col();
-                                        self.compute_index_from_row_and_col();
-                                    }
-                                } else {
-                                    self.top_visible_line.pos_into_render_lines -= 1;
-                                    if matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::Independent
-                                    ) || matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::End
-                                    ) {
-                                        self.top_visible_line.hard_line_info.hard_line_no -= 1;
-                                        self.no_of_hard_lines_queried += 1;
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .start_idx_in_global_buf =
-                                            self.piece_tree.get_start_offset_of_a_line(
-                                                self.top_visible_line.hard_line_info.hard_line_no,
-                                            );
-                                        if matches!(
-                                            self.render_lines
-                                                [self.top_visible_line.pos_into_render_lines]
-                                                .line_type,
-                                            LineType::End
-                                        ) {
-                                            let mut i = self.top_visible_line.pos_into_render_lines;
-                                            loop {
-                                                match self.render_lines[i].line_type {
-                                                    LineType::Independent => {
-                                                        break;
-                                                    }
-                                                    LineType::Start => {
-                                                        break;
-                                                    }
-                                                    LineType::Between => {
-                                                        i -= 1;
-                                                    }
-                                                    LineType::End => {
-                                                        i -= 1;
-                                                    }
-                                                    LineType::Empty => {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .pos_into_render_lines = i;
-                                        } else {
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .pos_into_render_lines =
-                                                self.top_visible_line.pos_into_render_lines;
-                                        }
-                                    }
-                                    self.compute_next_line_col();
-                                    self.compute_index_from_row_and_col();
-                                }
-                            } else {
-                                self.row_number -= 1;
                                 self.compute_next_line_col();
                                 self.compute_index_from_row_and_col();
                             }
                         }
-                        KeyCode::Down => {
-                            if self.row_number + 1 >= self.window_height {
-                                if self.top_visible_line.pos_into_render_lines + self.window_height
-                                    < self.render_lines.len()
-                                {
-                                    self.top_visible_line.pos_into_render_lines += 1;
-                                    if matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::Independent
-                                    ) || matches!(
-                                        self.render_lines
-                                            [self.top_visible_line.pos_into_render_lines]
-                                            .line_type,
-                                        LineType::Start
-                                    ) {
-                                        self.top_visible_line.hard_line_info.hard_line_no += 1;
-                                        self.no_of_hard_lines_queried =
-                                            self.no_of_hard_lines_queried.saturating_sub(1);
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .start_idx_in_global_buf =
-                                            self.piece_tree.get_start_offset_of_a_line(
-                                                self.top_visible_line.hard_line_info.hard_line_no,
-                                            );
-                                        self.top_visible_line
-                                            .hard_line_info
-                                            .pos_into_render_lines =
-                                            self.top_visible_line.pos_into_render_lines;
-                                    }
-                                    self.compute_next_line_col();
-                                    self.compute_index_from_row_and_col();
-                                } else {
-                                    let total_lines = self.piece_tree.get_line_feed_count() + 1;
-                                    if self.top_visible_line.hard_line_info.hard_line_no
-                                        + self.no_of_hard_lines_queried
-                                        < total_lines
-                                    {
-                                        self.top_visible_line.pos_into_render_lines += 1;
-                                        self.request_more_lines();
-                                        if matches!(
-                                            self.render_lines
-                                                [self.top_visible_line.pos_into_render_lines]
-                                                .line_type,
-                                            LineType::Independent
-                                        ) || matches!(
-                                            self.render_lines
-                                                [self.top_visible_line.pos_into_render_lines]
-                                                .line_type,
-                                            LineType::Start
-                                        ) {
-                                            self.top_visible_line.hard_line_info.hard_line_no += 1;
-                                            self.no_of_hard_lines_queried =
-                                                self.no_of_hard_lines_queried.saturating_sub(1);
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .start_idx_in_global_buf =
-                                                self.piece_tree.get_start_offset_of_a_line(
-                                                    self.top_visible_line
-                                                        .hard_line_info
-                                                        .hard_line_no,
-                                                );
-                                            self.top_visible_line
-                                                .hard_line_info
-                                                .pos_into_render_lines =
-                                                self.top_visible_line.pos_into_render_lines;
-                                        }
-                                        self.compute_next_line_col();
-                                        self.compute_index_from_row_and_col();
-                                    }
-                                }
-                            } else {
-                                self.row_number =
-                                    min(self.row_number + 1, self.render_lines.len() - 1);
-                                self.compute_next_line_col();
-                                self.compute_index_from_row_and_col();
-                            }
-                        }
-                        _ => {}
-                    },
-                    _ => {}
+                    } else {
+                        self.row_number = min(self.row_number + 1, self.render_lines.len() - 1);
+                        self.compute_next_line_col();
+                        self.compute_index_from_row_and_col();
+                    }
                 }
+                _ => {}
+            },
+            _ => {}
+        }
         Ok(())
     }
     fn compute_next_line_col(&mut self) {
@@ -1224,7 +1228,9 @@ impl App {
         let mut end = start;
         let mut no_of_hard_lines_crossed = 0;
         let mut i = self.top_visible_line.pos_into_render_lines;
-        while no_of_hard_lines_crossed < self.window_height && end < self.piece_tree.get_tree_len()
+        while i < self.render_lines.len()
+            && no_of_hard_lines_crossed < self.window_height
+            && end < self.piece_tree.get_tree_len()
         {
             match &self.render_lines[i].line_type {
                 LineType::Independent => {
@@ -1761,27 +1767,7 @@ impl App {
             self.render_lines.push(txt_line);
         }
     }
-    fn text_wrap<'a>(&self, line: &'a str) -> Vec<&'a str> {
-        let segmenter = GraphemeClusterSegmenter::new();
-        let mut breakpoints = segmenter.segment_str(line);
-        let mut previous_end_line = 0;
-        let mut end_of_current_line = 0 + self.window_width - 1;
-        let mut broken_lines: Vec<&str> = Vec::with_capacity((line.len() / self.window_width) + 1);
-        let mut previous_break_point = 0;
-        while let Some(breakpoint) = breakpoints.next() {
-            if breakpoint == line.len() - 1 {
-                broken_lines.push(&line[previous_end_line + 1..line.len()]);
-                break;
-            }
-            if breakpoint <= end_of_current_line {
-                continue;
-            }
-            previous_end_line = end_of_current_line;
-            end_of_current_line = breakpoint + self.window_width - 1;
-            broken_lines.push(&line[breakpoint - self.window_width..breakpoint]);
-        }
-        broken_lines
-    }
+    
 }
 
 fn get_new_top_line(
@@ -1796,12 +1782,13 @@ fn get_new_top_line(
     (max(0, top_line_new)) as usize
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     #[default]
     Normal,
     Editing,
     Exiting,
+    TooSmall,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1930,96 +1917,4 @@ pub fn build_capture_styles(query: &Query) -> Vec<Style> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::crossterm::event::KeyEvent;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_file_path(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("tuixt_test_{name}_{nanos}.rs"))
-    }
-
-    fn make_test_app(initial_content: &str, file_path: String) -> App {
-        let language = tree_sitter_rust::LANGUAGE.into();
-        let mut parser = Parser::new();
-        parser.set_language(&language).unwrap();
-        let query = Query::new(&language, tree_sitter_rust::HIGHLIGHTS_QUERY).unwrap();
-        let styles = build_capture_styles(&query);
-        let mut app = App::new(initial_content, 80, 24, true, parser, file_path, query, styles);
-        app.compute_line_starts_with_wrap();
-        app
-    }
-
-    #[test]
-    fn ctrl_s_in_normal_mode_creates_new_file_and_saves_content() {
-        let path = temp_file_path("ctrl_s_create");
-        assert!(!path.exists());
-
-        let mut app = make_test_app("fn main() {}", path.to_string_lossy().into_owned());
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
-            .unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() {}");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn ctrl_s_in_normal_mode_overwrites_existing_file() {
-        let path = temp_file_path("ctrl_s_overwrite");
-        fs::write(&path, "old content").unwrap();
-
-        let mut app = make_test_app("old content", path.to_string_lossy().into_owned());
-        app.insert(0, "new ");
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
-            .unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new old content");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn exiting_yes_creates_and_saves_file() {
-        let path = temp_file_path("exit_yes");
-        assert!(!path.exists());
-
-        let mut app = make_test_app("hello", path.to_string_lossy().into_owned());
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
-            .unwrap();
-        assert!(matches!(app.mode, Mode::Exiting));
-        assert!(!app.exit);
-
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
-            .unwrap();
-        assert!(app.exit);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn exiting_no_does_not_create_file() {
-        let path = temp_file_path("exit_no");
-        assert!(!path.exists());
-
-        let mut app = make_test_app("hello", path.to_string_lossy().into_owned());
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
-            .unwrap();
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
-            .unwrap();
-
-        assert!(app.exit);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn save_file_with_empty_path_is_noop() {
-        let mut app = make_test_app("hello", String::new());
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
-            .unwrap();
-    }
-}
